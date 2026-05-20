@@ -9,7 +9,7 @@ A Playwright and AI-powered multi-task real-time monitoring tool for Xianyu (闲
 - **Web Visual Management**: Task management, account management, AI criteria editing, run logs, results browsing
 - **AI-Driven**: Natural language task creation, multimodal model for in-depth product analysis
 - **Multi-Task Concurrency**: Independent configuration for keywords, prices, filters, and AI prompts
-- **SQLite as Primary Storage**: Tasks, results, and price history are persisted in one embedded database instead of repeatedly scanning `jsonl`
+- **MySQL-Ready Primary Storage**: Tasks, results, and price history can run on MySQL, with SQLite kept as a fallback for local setups
 - **Advanced Filtering**: Free shipping, new listing time range, province/city/district filtering
 - **Instant Notifications**: Supports ntfy.sh, WeChat Work (企业微信), Bark, Telegram, Webhook
 - **Scheduled Tasks**: Cron expression configuration for periodic tasks
@@ -45,6 +45,7 @@ cp .env.example .env
 | `OPENAI_API_KEY` | AI model API key | Yes |
 | `OPENAI_BASE_URL` | OpenAI-compatible API base URL | Yes |
 | `OPENAI_MODEL_NAME` | Model name with image input support | Yes |
+| `APP_DATABASE_URL` | Recommended MySQL connection URL | No |
 | `WEB_USERNAME` / `WEB_PASSWORD` | Web UI login credentials, default `admin/admin123` | No |
 
 See "Configuration" below for the rest.
@@ -86,23 +87,23 @@ docker compose down
 - The published Docker image already includes Chromium, so no extra browser install is required on the host.
 - Update image: `docker compose pull && docker compose up -d`
 - If you change `SERVER_PORT` in `.env`, update the `ports` mapping in `docker-compose.yaml` as well.
-- `docker-compose.yaml` now mounts the primary SQLite database directory as `./data:/app/data`, with the default database file at `data/app.sqlite3`
+- `docker-compose.yaml` now starts MySQL 8 by default and connects the app through `APP_DATABASE_URL`
 - These paths are persisted by default:
-  - `data/` for the SQLite primary store (tasks, results, price history)
+  - `mysql_data` for the MySQL primary store (tasks, results, price history)
   - `state/` for login-state cookie files
   - `prompts/` for task prompt files
   - `logs/` for runtime logs
   - `images/` for downloaded product images and per-task temporary image folders
-  - `config.json`, `jsonl/`, and `price_history/` as legacy sources for the first SQLite migration
+  - `config.json`, `jsonl/`, and `price_history/` as legacy sources for the first migration
 
 ### Storage and Migration
 
-- SQLite is now the online primary storage, with the default path `data/app.sqlite3`
-- You can override the database path with `APP_DATABASE_FILE`; Docker sets it to `/app/data/app.sqlite3`
+- MySQL is the recommended online primary storage and is configured through `APP_DATABASE_URL`
+- If `APP_DATABASE_URL` is empty, the app falls back to SQLite with the default path `data/app.sqlite3`
 - On startup, the app initializes the schema and tries to import existing data once from legacy `config.json`, `jsonl/`, and `price_history/`
-- `state/`, `prompts/`, `logs/`, and `images/` remain filesystem-based and are not stored in SQLite
+- `state/`, `prompts/`, `logs/`, and `images/` remain filesystem-based and are not stored in the database
 - Product images are temporarily downloaded to `images/task_images_<task_name>/` and are normally cleaned up when the task finishes
-- After the first upgrade and after verifying the database contents in `data/app.sqlite3`, you can decide whether to keep the legacy `config.json`, `jsonl/`, and `price_history/` mounts
+- After the first migration and after verifying the database contents, you can decide whether to keep the legacy `config.json`, `jsonl/`, and `price_history/` mounts
 
 ## User Guide
 
@@ -122,7 +123,7 @@ docker compose down
 
 ### Results and Logs
 
-- The results page and export endpoints now query SQLite instead of directly scanning `jsonl` files.
+- The results page and export endpoints now query the database instead of directly scanning `jsonl` files.
 - The logs page is the first place to inspect login-state expiry, anti-bot issues, or AI call failures.
 
 ### System Settings
@@ -147,9 +148,9 @@ npm install
 npm run dev
 ```
 
-- FastAPI initializes SQLite on startup and performs the one-time legacy import from `config.json/jsonl/price_history` when needed
-- `spider_v2.py` now loads tasks from SQLite by default; JSON config is only used when `--config <path>` is passed explicitly
-- The default local database path is `data/app.sqlite3`
+- FastAPI initializes the database on startup and performs the one-time legacy import from `config.json/jsonl/price_history` when needed
+- `spider_v2.py` now loads tasks from the database by default; JSON config is only used when `--config <path>` is passed explicitly
+- The recommended setup is `APP_DATABASE_URL` for MySQL; otherwise the default local SQLite path is `data/app.sqlite3`
 - The Vite dev server proxies `/api`, `/auth`, and `/ws` to `http://127.0.0.1:8000`.
 - `npm run build` writes `web-ui/dist/`, and `start.sh` copies it to the repository root `dist/`.
 - FastAPI serves `dist/index.html` and `dist/assets/` from the repository root.
@@ -183,6 +184,8 @@ cd web-ui && npm run build
 ### AI and Runtime
 
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL_NAME`: required AI model settings.
+- `APP_DATABASE_URL`: MySQL connection URL, for example `mysql://user:pass@host:3306/dbname?charset=utf8mb4`.
+- `APP_DATABASE_FILE`: SQLite file path used only when `APP_DATABASE_URL` is unset.
 - `PROXY_URL`: dedicated HTTP/SOCKS5 proxy for AI requests.
 - `RUN_HEADLESS`: whether the scraper runs headless; keep it `true` in Docker.
 - `SERVER_PORT`: backend port, default `8000`.
@@ -238,7 +241,7 @@ graph TD
     F --> G[Call AI for Analysis];
     G --> H{AI Recommended?};
     H -- Yes --> I[Send Notification];
-    H -- No --> J[Save Record to SQLite];
+    H -- No --> J[Save Record to Database];
     I --> J;
     D -- No --> K[Next Page/Wait];
     K --> C;

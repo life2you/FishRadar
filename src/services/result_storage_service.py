@@ -1,5 +1,5 @@
 """
-结果数据的 SQLite 读写服务。
+结果数据的数据库读写服务。
 """
 from __future__ import annotations
 
@@ -439,17 +439,35 @@ def _save_result_blacklist_keywords_sync(filename: str, keywords: list[str]) -> 
     normalized_keywords = normalize_blacklist_keywords(keywords)
     now = datetime.now().isoformat()
     with sqlite_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO result_blacklist_rules (
-                result_filename, blacklist_keywords_json, updated_at
-            ) VALUES (?, ?, ?)
-            ON CONFLICT(result_filename) DO UPDATE SET
-                blacklist_keywords_json = excluded.blacklist_keywords_json,
-                updated_at = excluded.updated_at
-            """,
-            (filename, json.dumps(normalized_keywords, ensure_ascii=False), now),
+        payload = (
+            filename,
+            json.dumps(normalized_keywords, ensure_ascii=False),
+            now,
         )
+        if conn.backend == "mysql":
+            conn.execute(
+                """
+                INSERT INTO result_blacklist_rules (
+                    result_filename, blacklist_keywords_json, updated_at
+                ) VALUES (?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    blacklist_keywords_json = VALUES(blacklist_keywords_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                payload,
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO result_blacklist_rules (
+                    result_filename, blacklist_keywords_json, updated_at
+                ) VALUES (?, ?, ?)
+                ON CONFLICT(result_filename) DO UPDATE SET
+                    blacklist_keywords_json = excluded.blacklist_keywords_json,
+                    updated_at = excluded.updated_at
+                """,
+                payload,
+            )
         conn.commit()
     return normalized_keywords
 

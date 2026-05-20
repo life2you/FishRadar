@@ -280,7 +280,7 @@ def _parse_price(value):
 
 def _bootstrap_completed(conn, key: str) -> bool:
     row = conn.execute(
-        "SELECT value FROM app_metadata WHERE key = ?",
+        "SELECT value FROM app_metadata WHERE `key` = ?",
         (key,),
     ).fetchone()
     return row is not None
@@ -289,7 +289,7 @@ def _bootstrap_completed(conn, key: str) -> bool:
 def _mark_bootstrap_completed(conn, key: str) -> None:
     conn.execute(
         """
-        INSERT OR REPLACE INTO app_metadata(key, value)
+        INSERT OR REPLACE INTO app_metadata(`key`, value)
         VALUES (?, 'done')
         """,
         (key,),

@@ -13,6 +13,7 @@ httpx[socks]
 Pillow
 pyzbar
 qrcode
+pymysql
 pytest
 pytest-asyncio
 coverage
