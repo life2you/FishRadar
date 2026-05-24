@@ -1,146 +1,30 @@
 """
-Database connection and schema initialization helpers.
+MySQL-only database connection and schema initialization helpers.
 
-The historical module name is kept for compatibility, but the implementation
-now supports both SQLite and MySQL.
+The historical module name is kept for compatibility with the rest of the
+codebase, but SQLite support has been fully removed.
 """
 from __future__ import annotations
 
 import os
 import re
-import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
-from pathlib import Path
-import threading
 from typing import Any, Iterator
 from urllib.parse import parse_qs, unquote, urlparse
-
-from src.infrastructure.persistence.storage_names import DEFAULT_DATABASE_PATH
 
 try:
     import pymysql
     from pymysql.cursors import DictCursor
-except ImportError:  # pragma: no cover - only exercised when MySQL is requested
+except ImportError:  # pragma: no cover - depends on optional dependency
     pymysql = None
     DictCursor = None
 
 
-BUSY_TIMEOUT_MS = 5000
-SQLITE_BACKEND = "sqlite"
 MYSQL_BACKEND = "mysql"
 MYSQL_BOOTSTRAP_LOCK = threading.Lock()
 MYSQL_READY_DATABASES: set[tuple[str, int, str, str]] = set()
-
-SQLITE_SCHEMA_STATEMENTS = (
-    """
-    CREATE TABLE IF NOT EXISTS app_metadata (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS tasks (
-        id INTEGER PRIMARY KEY,
-        task_name TEXT NOT NULL,
-        enabled INTEGER NOT NULL,
-        keyword TEXT NOT NULL,
-        description TEXT,
-        analyze_images INTEGER NOT NULL,
-        max_pages INTEGER NOT NULL,
-        personal_only INTEGER NOT NULL,
-        min_price TEXT,
-        max_price TEXT,
-        cron TEXT,
-        ai_prompt_base_file TEXT NOT NULL,
-        ai_prompt_criteria_file TEXT NOT NULL,
-        account_state_file TEXT,
-        account_strategy TEXT NOT NULL,
-        free_shipping INTEGER NOT NULL,
-        new_publish_option TEXT,
-        region TEXT,
-        decision_mode TEXT NOT NULL,
-        keyword_rules_json TEXT NOT NULL,
-        is_running INTEGER NOT NULL
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS result_items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        result_filename TEXT NOT NULL,
-        keyword TEXT NOT NULL,
-        task_name TEXT NOT NULL,
-        crawl_time TEXT NOT NULL,
-        publish_time TEXT,
-        price REAL,
-        price_display TEXT,
-        item_id TEXT,
-        title TEXT,
-        link TEXT,
-        link_unique_key TEXT NOT NULL,
-        seller_nickname TEXT,
-        is_recommended INTEGER NOT NULL,
-        analysis_source TEXT,
-        keyword_hit_count INTEGER NOT NULL,
-        status TEXT NOT NULL DEFAULT 'active',
-        raw_json TEXT NOT NULL,
-        UNIQUE(result_filename, link_unique_key)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS price_snapshots (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        keyword_slug TEXT NOT NULL,
-        keyword TEXT NOT NULL,
-        task_name TEXT NOT NULL,
-        snapshot_time TEXT NOT NULL,
-        snapshot_day TEXT NOT NULL,
-        run_id TEXT NOT NULL,
-        item_id TEXT NOT NULL,
-        title TEXT,
-        price REAL NOT NULL,
-        price_display TEXT,
-        tags_json TEXT NOT NULL,
-        region TEXT,
-        seller TEXT,
-        publish_time TEXT,
-        link TEXT,
-        UNIQUE(keyword_slug, run_id, item_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS result_blacklist_rules (
-        result_filename TEXT PRIMARY KEY,
-        blacklist_keywords_json TEXT NOT NULL,
-        updated_at TEXT NOT NULL
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS idx_tasks_name ON tasks(task_name)",
-    """
-    CREATE INDEX IF NOT EXISTS idx_results_filename_crawl
-    ON result_items(result_filename, crawl_time DESC)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_results_filename_publish
-    ON result_items(result_filename, publish_time DESC)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_results_filename_price
-    ON result_items(result_filename, price DESC)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_results_filename_recommended
-    ON result_items(result_filename, is_recommended, analysis_source, crawl_time DESC)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_snapshots_keyword_time
-    ON price_snapshots(keyword_slug, snapshot_time DESC)
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS idx_snapshots_keyword_item_time
-    ON price_snapshots(keyword_slug, item_id, snapshot_time DESC)
-    """,
-)
 
 MYSQL_SCHEMA_STATEMENTS = (
     """
@@ -152,6 +36,7 @@ MYSQL_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS tasks (
         id BIGINT PRIMARY KEY COMMENT '任务ID',
+        tenant_id BIGINT NULL COMMENT '租户ID',
         task_name VARCHAR(255) NOT NULL COMMENT '任务名称',
         enabled TINYINT(1) NOT NULL COMMENT '是否启用',
         keyword VARCHAR(255) NOT NULL COMMENT '搜索关键词',
@@ -177,6 +62,7 @@ MYSQL_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS result_items (
         id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+        tenant_id BIGINT NULL COMMENT '租户ID',
         result_filename VARCHAR(255) NOT NULL COMMENT '结果集逻辑文件名',
         keyword VARCHAR(255) NOT NULL COMMENT '搜索关键词',
         task_name VARCHAR(255) NOT NULL COMMENT '来源任务名称',
@@ -200,6 +86,7 @@ MYSQL_SCHEMA_STATEMENTS = (
     """
     CREATE TABLE IF NOT EXISTS price_snapshots (
         id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+        tenant_id BIGINT NULL COMMENT '租户ID',
         keyword_slug VARCHAR(255) NOT NULL COMMENT '关键词标准化标识',
         keyword VARCHAR(255) NOT NULL COMMENT '搜索关键词',
         task_name VARCHAR(255) NOT NULL COMMENT '来源任务名称',
@@ -225,10 +112,73 @@ MYSQL_SCHEMA_STATEMENTS = (
         updated_at VARCHAR(64) NOT NULL COMMENT '更新时间'
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='结果黑名单规则表'
     """,
+    """
+    CREATE TABLE IF NOT EXISTS tenants (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '租户ID',
+        name VARCHAR(255) NOT NULL COMMENT '租户名称',
+        slug VARCHAR(255) NOT NULL UNIQUE COMMENT '租户唯一标识',
+        status VARCHAR(32) NOT NULL COMMENT '租户状态',
+        ai_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否允许租户使用AI分析',
+        activation_required TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否需要卡密激活后才能使用',
+        activated_at VARCHAR(64) NULL COMMENT '激活时间',
+        access_expires_at VARCHAR(64) NULL COMMENT '工作台权限到期时间',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id BIGINT PRIMARY KEY COMMENT '用户ID',
+        username VARCHAR(255) NOT NULL UNIQUE COMMENT '登录用户名',
+        password_hash VARCHAR(512) NOT NULL COMMENT '密码哈希',
+        role VARCHAR(32) NOT NULL COMMENT '平台角色',
+        status VARCHAR(32) NOT NULL COMMENT '用户状态',
+        display_name VARCHAR(255) NULL COMMENT '显示名称',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS user_tenant_memberships (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '主键ID',
+        user_id BIGINT NOT NULL COMMENT '用户ID',
+        tenant_id BIGINT NOT NULL COMMENT '租户ID',
+        membership_role VARCHAR(32) NOT NULL COMMENT '租户内角色',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+        UNIQUE KEY uniq_user_tenant_membership (user_id, tenant_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='用户租户关系表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+        session_token VARCHAR(255) PRIMARY KEY COMMENT '会话令牌',
+        user_id BIGINT NOT NULL COMMENT '用户ID',
+        tenant_id BIGINT NULL COMMENT '租户ID',
+        expires_at VARCHAR(64) NOT NULL COMMENT '过期时间',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录会话表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS activation_codes (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '卡密ID',
+        code VARCHAR(255) NOT NULL UNIQUE COMMENT '激活卡密',
+        status VARCHAR(32) NOT NULL COMMENT '卡密状态',
+        duration_minutes INT NOT NULL DEFAULT 1440 COMMENT '激活后可使用时长(分钟)',
+        note VARCHAR(255) NULL COMMENT '备注',
+        created_by_user_id BIGINT NULL COMMENT '创建管理员用户ID',
+        redeemed_by_tenant_id BIGINT NULL COMMENT '兑换租户ID',
+        redeemed_by_user_id BIGINT NULL COMMENT '兑换用户ID',
+        redeemed_at VARCHAR(64) NULL COMMENT '兑换时间',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户激活卡密表'
+    """,
 )
 
 MYSQL_INDEX_DEFINITIONS = (
     ("idx_tasks_name", "tasks", "CREATE INDEX idx_tasks_name ON tasks(task_name)"),
+    ("idx_tasks_tenant_id", "tasks", "CREATE INDEX idx_tasks_tenant_id ON tasks(tenant_id)"),
+    (
+        "idx_results_tenant_filename",
+        "result_items",
+        "CREATE INDEX idx_results_tenant_filename ON result_items(tenant_id, result_filename, crawl_time)",
+    ),
     (
         "idx_results_filename_crawl",
         "result_items",
@@ -255,6 +205,11 @@ MYSQL_INDEX_DEFINITIONS = (
         "CREATE INDEX idx_results_filename_status_crawl ON result_items(result_filename, status, crawl_time)",
     ),
     (
+        "idx_snapshots_tenant_keyword_time",
+        "price_snapshots",
+        "CREATE INDEX idx_snapshots_tenant_keyword_time ON price_snapshots(tenant_id, keyword_slug, snapshot_time)",
+    ),
+    (
         "idx_snapshots_keyword_time",
         "price_snapshots",
         "CREATE INDEX idx_snapshots_keyword_time ON price_snapshots(keyword_slug, snapshot_time)",
@@ -264,9 +219,15 @@ MYSQL_INDEX_DEFINITIONS = (
         "price_snapshots",
         "CREATE INDEX idx_snapshots_keyword_item_time ON price_snapshots(keyword_slug, item_id, snapshot_time)",
     ),
+    ("idx_users_username", "users", "CREATE INDEX idx_users_username ON users(username)"),
+    ("idx_auth_sessions_user_id", "auth_sessions", "CREATE INDEX idx_auth_sessions_user_id ON auth_sessions(user_id)"),
+    ("idx_activation_codes_status", "activation_codes", "CREATE INDEX idx_activation_codes_status ON activation_codes(status)"),
 )
 
-MYSQL_COMMENT_MIGRATION_KEY = "migration:mysql_schema_comments_v1"
+MYSQL_TENANT_COLUMNS_MIGRATION_KEY = "migration:mysql_tenant_columns_v1"
+MYSQL_TENANT_ACCESS_MIGRATION_KEY = "migration:mysql_tenant_access_v2"
+MYSQL_COMMENT_MIGRATION_KEY = "migration:mysql_schema_comments_v2"
+
 MYSQL_COMMENT_STATEMENTS = (
     """
     ALTER TABLE app_metadata
@@ -277,6 +238,7 @@ MYSQL_COMMENT_STATEMENTS = (
     """
     ALTER TABLE tasks
     MODIFY COLUMN id BIGINT NOT NULL COMMENT '任务ID',
+    MODIFY COLUMN tenant_id BIGINT NULL COMMENT '租户ID',
     MODIFY COLUMN task_name VARCHAR(255) NOT NULL COMMENT '任务名称',
     MODIFY COLUMN enabled TINYINT(1) NOT NULL COMMENT '是否启用',
     MODIFY COLUMN keyword VARCHAR(255) NOT NULL COMMENT '搜索关键词',
@@ -302,6 +264,7 @@ MYSQL_COMMENT_STATEMENTS = (
     """
     ALTER TABLE result_items
     MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    MODIFY COLUMN tenant_id BIGINT NULL COMMENT '租户ID',
     MODIFY COLUMN result_filename VARCHAR(255) NOT NULL COMMENT '结果集逻辑文件名',
     MODIFY COLUMN keyword VARCHAR(255) NOT NULL COMMENT '搜索关键词',
     MODIFY COLUMN task_name VARCHAR(255) NOT NULL COMMENT '来源任务名称',
@@ -324,6 +287,7 @@ MYSQL_COMMENT_STATEMENTS = (
     """
     ALTER TABLE price_snapshots
     MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    MODIFY COLUMN tenant_id BIGINT NULL COMMENT '租户ID',
     MODIFY COLUMN keyword_slug VARCHAR(255) NOT NULL COMMENT '关键词标准化标识',
     MODIFY COLUMN keyword VARCHAR(255) NOT NULL COMMENT '搜索关键词',
     MODIFY COLUMN task_name VARCHAR(255) NOT NULL COMMENT '来源任务名称',
@@ -347,6 +311,62 @@ MYSQL_COMMENT_STATEMENTS = (
     MODIFY COLUMN blacklist_keywords_json LONGTEXT NOT NULL COMMENT '黑名单关键词JSON',
     MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
     COMMENT = '结果黑名单规则表'
+    """,
+    """
+    ALTER TABLE tenants
+    MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '租户ID',
+    MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '租户名称',
+    MODIFY COLUMN slug VARCHAR(255) NOT NULL COMMENT '租户唯一标识',
+    MODIFY COLUMN status VARCHAR(32) NOT NULL COMMENT '租户状态',
+    MODIFY COLUMN ai_enabled TINYINT(1) NOT NULL DEFAULT 0 COMMENT '是否允许租户使用AI分析',
+    MODIFY COLUMN activation_required TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否需要卡密激活后才能使用',
+    MODIFY COLUMN activated_at VARCHAR(64) NULL COMMENT '激活时间',
+    MODIFY COLUMN access_expires_at VARCHAR(64) NULL COMMENT '工作台权限到期时间',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    COMMENT = '租户表'
+    """,
+    """
+    ALTER TABLE users
+    MODIFY COLUMN id BIGINT NOT NULL COMMENT '用户ID',
+    MODIFY COLUMN username VARCHAR(255) NOT NULL COMMENT '登录用户名',
+    MODIFY COLUMN password_hash VARCHAR(512) NOT NULL COMMENT '密码哈希',
+    MODIFY COLUMN role VARCHAR(32) NOT NULL COMMENT '平台角色',
+    MODIFY COLUMN status VARCHAR(32) NOT NULL COMMENT '用户状态',
+    MODIFY COLUMN display_name VARCHAR(255) NULL COMMENT '显示名称',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    COMMENT = '用户表'
+    """,
+    """
+    ALTER TABLE user_tenant_memberships
+    MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '主键ID',
+    MODIFY COLUMN user_id BIGINT NOT NULL COMMENT '用户ID',
+    MODIFY COLUMN tenant_id BIGINT NOT NULL COMMENT '租户ID',
+    MODIFY COLUMN membership_role VARCHAR(32) NOT NULL COMMENT '租户内角色',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    COMMENT = '用户租户关系表'
+    """,
+    """
+    ALTER TABLE auth_sessions
+    MODIFY COLUMN session_token VARCHAR(255) NOT NULL COMMENT '会话令牌',
+    MODIFY COLUMN user_id BIGINT NOT NULL COMMENT '用户ID',
+    MODIFY COLUMN tenant_id BIGINT NULL COMMENT '租户ID',
+    MODIFY COLUMN expires_at VARCHAR(64) NOT NULL COMMENT '过期时间',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    COMMENT = '登录会话表'
+    """,
+    """
+    ALTER TABLE activation_codes
+    MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '卡密ID',
+    MODIFY COLUMN code VARCHAR(255) NOT NULL COMMENT '激活卡密',
+    MODIFY COLUMN status VARCHAR(32) NOT NULL COMMENT '卡密状态',
+    MODIFY COLUMN duration_minutes INT NOT NULL DEFAULT 1440 COMMENT '激活后可使用时长(分钟)',
+    MODIFY COLUMN note VARCHAR(255) NULL COMMENT '备注',
+    MODIFY COLUMN created_by_user_id BIGINT NULL COMMENT '创建管理员用户ID',
+    MODIFY COLUMN redeemed_by_tenant_id BIGINT NULL COMMENT '兑换租户ID',
+    MODIFY COLUMN redeemed_by_user_id BIGINT NULL COMMENT '兑换用户ID',
+    MODIFY COLUMN redeemed_at VARCHAR(64) NULL COMMENT '兑换时间',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    COMMENT = '租户激活卡密表'
     """,
 )
 
@@ -381,15 +401,15 @@ class DatabaseCursor:
 
 
 class DatabaseConnection:
-    def __init__(self, backend: str, raw_connection):
-        self.backend = backend
+    def __init__(self, raw_connection):
+        self.backend = MYSQL_BACKEND
         self._raw = raw_connection
 
-    def execute(self, query: str, params: tuple | list | None = None) -> DatabaseCursor:
+    def execute(self, query: str, params: tuple | list | dict | None = None) -> DatabaseCursor:
         cursor = self._raw.cursor()
         normalized_params = params or ()
         cursor.execute(
-            _adapt_query(query, self.backend, normalized_params),
+            _adapt_query(query, normalized_params),
             _normalize_params(normalized_params),
         )
         return DatabaseCursor(cursor)
@@ -405,31 +425,12 @@ class DatabaseConnection:
 
 
 def get_database_url() -> str:
-    return str(os.getenv("APP_DATABASE_URL", "") or "").strip()
-
-
-def get_database_backend(db_path: str | None = None) -> str:
-    if db_path is not None:
-        return SQLITE_BACKEND
-    url = get_database_url()
+    url = str(os.getenv("APP_DATABASE_URL", "") or "").strip()
     if not url:
-        return SQLITE_BACKEND
-    if url.startswith(("mysql://", "mysql+pymysql://")):
-        return MYSQL_BACKEND
-    if url.startswith("sqlite://"):
-        return SQLITE_BACKEND
-    raise ValueError("Unsupported APP_DATABASE_URL. Use mysql:// or sqlite:///")
-
-
-def get_database_path() -> str:
-    url = get_database_url()
-    if url.startswith("sqlite:///"):
-        return url[len("sqlite:///") :]
-    return os.getenv("APP_DATABASE_FILE", DEFAULT_DATABASE_PATH)
-
-
-def _prepare_database_file(path: str) -> None:
-    Path(path).parent.mkdir(parents=True, exist_ok=True)
+        raise RuntimeError("APP_DATABASE_URL 未设置。当前版本仅支持 MySQL。")
+    if not url.startswith(("mysql://", "mysql+pymysql://")):
+        raise ValueError("APP_DATABASE_URL 仅支持 mysql:// 或 mysql+pymysql://")
+    return url
 
 
 def _parse_mysql_config(url: str) -> MysqlConfig:
@@ -452,7 +453,7 @@ def _parse_mysql_config(url: str) -> MysqlConfig:
 
 
 def _mysql_connect(config: MysqlConfig, *, with_database: bool):
-    if pymysql is None:  # pragma: no cover - depends on optional dependency
+    if pymysql is None:  # pragma: no cover
         raise RuntimeError("PyMySQL is required when APP_DATABASE_URL points to MySQL")
     kwargs = {
         "host": config.host,
@@ -491,28 +492,18 @@ def _ensure_mysql_database(config: MysqlConfig) -> None:
         MYSQL_READY_DATABASES.add(ready_key)
 
 
-def _apply_sqlite_pragmas(conn: sqlite3.Connection) -> None:
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    conn.execute(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}")
-
-
 def _normalize_params(params):
     if isinstance(params, dict):
         return params
     return tuple(params)
 
 
-def _adapt_query(query: str, backend: str, params=None) -> str:
-    sql = query
-    if backend == MYSQL_BACKEND:
-        sql = sql.replace("INSERT OR IGNORE INTO", "INSERT IGNORE INTO")
-        sql = sql.replace("INSERT OR REPLACE INTO", "REPLACE INTO")
-        if isinstance(params, dict):
-            sql = re.sub(r":([A-Za-z_][A-Za-z0-9_]*)", r"%(\1)s", sql)
-        else:
-            sql = sql.replace("?", "%s")
-    return sql
+def _adapt_query(query: str, params=None) -> str:
+    sql = query.replace("INSERT OR IGNORE INTO", "INSERT IGNORE INTO")
+    sql = sql.replace("INSERT OR REPLACE INTO", "REPLACE INTO")
+    if isinstance(params, dict):
+        return re.sub(r":([A-Za-z_][A-Za-z0-9_]*)", r"%(\1)s", sql)
+    return sql.replace("?", "%s")
 
 
 def _mysql_column_exists(conn: DatabaseConnection, table_name: str, column_name: str) -> bool:
@@ -545,9 +536,11 @@ def _mysql_index_exists(conn: DatabaseConnection, table_name: str, index_name: s
     return row is not None
 
 
-def _init_mysql_schema(conn: DatabaseConnection) -> None:
+def init_schema(conn: DatabaseConnection) -> None:
     for statement in MYSQL_SCHEMA_STATEMENTS:
         conn.execute(statement)
+    _migrate_tenant_columns(conn)
+    _migrate_tenant_access_controls(conn)
     _migrate_result_items_status(conn)
     _apply_mysql_comments(conn)
     for index_name, table_name, statement in MYSQL_INDEX_DEFINITIONS:
@@ -556,22 +549,7 @@ def _init_mysql_schema(conn: DatabaseConnection) -> None:
     conn.commit()
 
 
-def _init_sqlite_schema(conn: DatabaseConnection) -> None:
-    for statement in SQLITE_SCHEMA_STATEMENTS:
-        conn.execute(statement)
-    _migrate_result_items_status(conn)
-    conn.commit()
-
-
-def init_schema(conn: DatabaseConnection) -> None:
-    if conn.backend == MYSQL_BACKEND:
-        _init_mysql_schema(conn)
-        return
-    _init_sqlite_schema(conn)
-
-
 def _migrate_result_items_status(conn: DatabaseConnection) -> None:
-    """Add the status column for older installs if it is missing."""
     row = conn.execute(
         "SELECT value FROM app_metadata WHERE `key` = ?",
         ("migration:result_items_status",),
@@ -579,33 +557,86 @@ def _migrate_result_items_status(conn: DatabaseConnection) -> None:
     if row is not None:
         return
 
-    if conn.backend == MYSQL_BACKEND:
-        if not _mysql_column_exists(conn, "result_items", "status"):
-            conn.execute(
-                "ALTER TABLE result_items ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'active'"
-            )
-    else:
-        cols = [r[1] for r in conn.execute("PRAGMA table_info(result_items)").fetchall()]
-        if "status" not in cols:
-            conn.execute(
-                "ALTER TABLE result_items ADD COLUMN status TEXT NOT NULL DEFAULT 'active'"
-            )
-
+    if not _mysql_column_exists(conn, "result_items", "status"):
+        conn.execute(
+            "ALTER TABLE result_items ADD COLUMN status VARCHAR(32) NOT NULL DEFAULT 'active'"
+        )
     conn.execute(
         "INSERT OR REPLACE INTO app_metadata(`key`, value) VALUES (?, 'done')",
         ("migration:result_items_status",),
     )
-
-    if conn.backend == MYSQL_BACKEND:
-        if not _mysql_index_exists(conn, "result_items", "idx_results_filename_status_crawl"):
-            conn.execute(
-                "CREATE INDEX idx_results_filename_status_crawl ON result_items(result_filename, status, crawl_time)"
-            )
-    else:
+    if not _mysql_index_exists(conn, "result_items", "idx_results_filename_status_crawl"):
         conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_results_filename_status_crawl"
-            " ON result_items(result_filename, status, crawl_time DESC)"
+            "CREATE INDEX idx_results_filename_status_crawl ON result_items(result_filename, status, crawl_time)"
         )
+
+
+def _migrate_tenant_columns(conn: DatabaseConnection) -> None:
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE `key` = ?",
+        (MYSQL_TENANT_COLUMNS_MIGRATION_KEY,),
+    ).fetchone()
+    if row is not None:
+        return
+
+    for table_name in ("tasks", "result_items", "price_snapshots"):
+        if not _mysql_column_exists(conn, table_name, "tenant_id"):
+            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN tenant_id BIGINT NULL")
+
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(`key`, value) VALUES (?, 'done')",
+        (MYSQL_TENANT_COLUMNS_MIGRATION_KEY,),
+    )
+
+
+def _migrate_tenant_access_controls(conn: DatabaseConnection) -> None:
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE `key` = ?",
+        (MYSQL_TENANT_ACCESS_MIGRATION_KEY,),
+    ).fetchone()
+    if row is not None:
+        return
+
+    tenant_columns = (
+        ("ai_enabled", "TINYINT(1) NOT NULL DEFAULT 0"),
+        ("activation_required", "TINYINT(1) NOT NULL DEFAULT 1"),
+        ("activated_at", "VARCHAR(64) NULL"),
+        ("access_expires_at", "VARCHAR(64) NULL"),
+    )
+    for column_name, column_type in tenant_columns:
+        if not _mysql_column_exists(conn, "tenants", column_name):
+            conn.execute(f"ALTER TABLE tenants ADD COLUMN {column_name} {column_type}")
+
+    if not _mysql_column_exists(conn, "activation_codes", "duration_minutes"):
+        conn.execute(
+            "ALTER TABLE activation_codes ADD COLUMN duration_minutes INT NOT NULL DEFAULT 1440"
+        )
+
+    conn.execute(
+        """
+        UPDATE tenants
+        SET ai_enabled = COALESCE(ai_enabled, 0),
+            activation_required = COALESCE(activation_required, 1)
+        """
+    )
+    conn.execute(
+        """
+        UPDATE activation_codes
+        SET duration_minutes = COALESCE(duration_minutes, 1440)
+        """
+    )
+    conn.execute(
+        """
+        UPDATE tenants
+        SET activation_required = 0
+        WHERE slug = ?
+        """,
+        ("platform-admin",),
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(`key`, value) VALUES (?, 'done')",
+        (MYSQL_TENANT_ACCESS_MIGRATION_KEY,),
+    )
 
 
 def _apply_mysql_comments(conn: DatabaseConnection) -> None:
@@ -624,28 +655,20 @@ def _apply_mysql_comments(conn: DatabaseConnection) -> None:
 
 
 @contextmanager
-def sqlite_connection(
-    db_path: str | None = None,
-) -> Iterator[DatabaseConnection]:
+def sqlite_connection(db_path: str | None = None) -> Iterator[DatabaseConnection]:
     """
     Historical helper name kept for compatibility.
 
-    When APP_DATABASE_URL points to MySQL, this yields a MySQL-backed
-    connection wrapper; otherwise it falls back to SQLite.
+    SQLite support has been removed. All callers now connect to MySQL through
+    APP_DATABASE_URL.
     """
-    backend = get_database_backend(db_path)
-    if backend == MYSQL_BACKEND:
-        config = _parse_mysql_config(get_database_url())
-        _ensure_mysql_database(config)
-        raw = _mysql_connect(config, with_database=True)
-    else:
-        path = db_path or get_database_path()
-        _prepare_database_file(path)
-        raw = sqlite3.connect(path)
-        raw.row_factory = sqlite3.Row
-        _apply_sqlite_pragmas(raw)
+    if db_path is not None:
+        raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
 
-    conn = DatabaseConnection(backend, raw)
+    config = _parse_mysql_config(get_database_url())
+    _ensure_mysql_database(config)
+    raw = _mysql_connect(config, with_database=True)
+    conn = DatabaseConnection(raw)
     try:
         yield conn
     except Exception:

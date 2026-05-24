@@ -98,8 +98,7 @@ docker compose down
 
 ### Storage and Migration
 
-- MySQL is the recommended online primary storage and is configured through `APP_DATABASE_URL`
-- If `APP_DATABASE_URL` is empty, the app falls back to SQLite with the default path `data/app.sqlite3`
+- The current version only supports MySQL and must be configured through `APP_DATABASE_URL`
 - On startup, the app initializes the schema and tries to import existing data once from legacy `config.json`, `jsonl/`, and `price_history/`
 - `state/`, `prompts/`, `logs/`, and `images/` remain filesystem-based and are not stored in the database
 - Product images are temporarily downloaded to `images/task_images_<task_name>/` and are normally cleaned up when the task finishes
@@ -150,7 +149,7 @@ npm run dev
 
 - FastAPI initializes the database on startup and performs the one-time legacy import from `config.json/jsonl/price_history` when needed
 - `spider_v2.py` now loads tasks from the database by default; JSON config is only used when `--config <path>` is passed explicitly
-- The recommended setup is `APP_DATABASE_URL` for MySQL; otherwise the default local SQLite path is `data/app.sqlite3`
+- MySQL is required through `APP_DATABASE_URL`
 - The Vite dev server proxies `/api`, `/auth`, and `/ws` to `http://127.0.0.1:8000`.
 - `npm run build` writes `web-ui/dist/`, and `start.sh` copies it to the repository root `dist/`.
 - FastAPI serves `dist/index.html` and `dist/assets/` from the repository root.
@@ -185,7 +184,6 @@ cd web-ui && npm run build
 
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL_NAME`: required AI model settings.
 - `APP_DATABASE_URL`: MySQL connection URL, for example `mysql://user:pass@host:3306/dbname?charset=utf8mb4`.
-- `APP_DATABASE_FILE`: SQLite file path used only when `APP_DATABASE_URL` is unset.
 - `PROXY_URL`: dedicated HTTP/SOCKS5 proxy for AI requests.
 - `RUN_HEADLESS`: whether the scraper runs headless; keep it `true` in Docker.
 - `SERVER_PORT`: backend port, default `8000`.

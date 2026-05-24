@@ -3,7 +3,9 @@ import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.api import dependencies as deps
 from src.api.routes import results
+from src.domain.models.auth import AuthenticatedUser
 from src.services.price_history_service import record_market_snapshots
 
 
@@ -13,7 +15,28 @@ def _write_jsonl(path, records):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypatch):
+async def _admin_user_override():
+    return AuthenticatedUser(
+        user_id=1,
+        username="admin",
+        role="admin",
+        tenant_id=1,
+        tenant_name="Platform Admin",
+        tenant_status="active",
+        tenant_ai_enabled=True,
+        tenant_activation_required=False,
+        tenant_activated_at="2026-01-01T00:00:00",
+    )
+
+
+def _build_results_client():
+    app = FastAPI()
+    app.include_router(results.router)
+    app.dependency_overrides[deps.require_workspace_user] = _admin_user_override
+    return TestClient(app)
+
+
+def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -52,9 +75,7 @@ def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypat
     ]
     _write_jsonl(target_file, records)
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     resp = client.get(
         "/api/results/demo_full_data.jsonl",
@@ -82,7 +103,7 @@ def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypat
     assert resp.status_code == 400
 
 
-def test_results_insights_and_export_csv(tmp_path, monkeypatch):
+def test_results_insights_and_export_csv(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -172,9 +193,7 @@ def test_results_insights_and_export_csv(tmp_path, monkeypatch):
         seen_item_ids=set(),
     )
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     insights_resp = client.get("/api/results/demo_full_data.jsonl/insights")
     assert insights_resp.status_code == 200
@@ -198,7 +217,7 @@ def test_results_insights_and_export_csv(tmp_path, monkeypatch):
     assert "Demo One" in text
 
 
-def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch):
+def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -226,9 +245,7 @@ def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch):
     ]
     _write_jsonl(target_file, records)
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     export_resp = client.get("/api/results/演示_full_data.jsonl/export")
     assert export_resp.status_code == 200
@@ -238,7 +255,7 @@ def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch):
     assert "filename*=UTF-8''%E6%BC%94%E7%A4%BA_full_data.csv" in disposition
 
 
-def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, monkeypatch):
+def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -357,9 +374,7 @@ def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, mon
         seen_item_ids=set(),
     )
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     update_rules_resp = client.put(
         "/api/results/macbook_air_m1_full_data.jsonl/blacklist-rules",

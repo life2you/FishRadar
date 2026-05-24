@@ -468,9 +468,15 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     processed_links = set()
     history_run_id = datetime.now().strftime("%Y%m%d%H%M%S")
     history_seen_item_ids: set[str] = set()
-    historical_snapshots = load_price_snapshots(keyword)
+    historical_snapshots = load_price_snapshots(
+        keyword,
+        tenant_scope=task_config.get("tenant_id"),
+    )
     result_filename = build_result_filename(keyword)
-    processed_links = load_processed_link_keys(keyword)
+    processed_links = load_processed_link_keys(
+        keyword,
+        tenant_scope=task_config.get("tenant_id"),
+    )
     if processed_links:
         print(f"LOG: 发现已存在结果集 {result_filename}，已加载 {len(processed_links)} 个历史商品用于去重。")
     else:
@@ -604,7 +610,11 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 image_downloader=download_all_images,
                 ai_analyzer=get_ai_analysis,
                 notifier=send_ntfy_notification,
-                saver=save_to_jsonl,
+                saver=lambda record, task_keyword: save_to_jsonl(
+                    record,
+                    task_keyword,
+                    tenant_scope=task_config.get("tenant_id"),
+                ),
             )
 
             # 增强反检测脚本（模拟真实移动设备）
@@ -949,6 +959,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                             run_id=history_run_id,
                             snapshot_time=datetime.now().isoformat(),
                             seen_item_ids=history_seen_item_ids,
+                            tenant_scope=task_config.get("tenant_id"),
                         )
                     )
 

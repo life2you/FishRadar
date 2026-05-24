@@ -1,10 +1,8 @@
 """
-SQLite 持久化相关的统一命名规则。
+MySQL 持久化与结果文件相关的统一命名规则。
 """
 from __future__ import annotations
 
-
-DEFAULT_DATABASE_PATH = "data/app.sqlite3"
 RESULT_FILE_SUFFIX = "_full_data.jsonl"
 
 

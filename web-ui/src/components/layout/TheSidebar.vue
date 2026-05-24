@@ -3,30 +3,35 @@ import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
 import { 
   LayoutDashboard, 
-  ListTodo, 
+  Building2,
   Users, 
-  Layers, 
   Terminal, 
   Settings2,
   ChevronRight
 } from 'lucide-vue-next'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useAuth } from '@/composables/useAuth'
 import { useI18n } from 'vue-i18n'
 
 const emit = defineEmits<{
   (event: 'navigate'): void
 }>()
 const { isConnected } = useWebSocket()
+const { canAccessRoute, role } = useAuth()
 const { t } = useI18n()
 
-const navItems = computed(() => [
-  { to: '/dashboard', label: t('sidebar.dashboard'), icon: LayoutDashboard },
-  { to: '/tasks', label: t('sidebar.tasks'), icon: ListTodo },
-  { to: '/accounts', label: t('sidebar.accounts'), icon: Users },
-  { to: '/results', label: t('sidebar.results'), icon: Layers },
-  { to: '/logs', label: t('sidebar.logs'), icon: Terminal },
-  { to: '/settings', label: t('sidebar.settings'), icon: Settings2 },
-])
+const navItems = computed(() => {
+  if (role.value !== 'admin') {
+    return []
+  }
+  return [
+    { to: '/dashboard', name: 'Dashboard', label: t('sidebar.dashboard'), icon: LayoutDashboard },
+    { to: '/tenants', name: 'Tenants', label: t('sidebar.tenants'), icon: Building2 },
+    { to: '/accounts', name: 'Accounts', label: t('sidebar.accounts'), icon: Users },
+    { to: '/logs', name: 'Logs', label: t('sidebar.logs'), icon: Terminal },
+    { to: '/settings', name: 'Settings', label: t('sidebar.settings'), icon: Settings2 },
+  ].filter((item) => canAccessRoute(item.name))
+})
 
 const connectionLabel = computed(() => (
   isConnected.value ? t('sidebar.backendConnected') : t('sidebar.backendConnecting')

@@ -1,13 +1,14 @@
 """
 结果文件管理路由
 """
-from fastapi import APIRouter, HTTPException, Query
-from fastapi.responses import Response
 from enum import Enum
-
 from pydantic import BaseModel
 from urllib.parse import quote
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
 
+from src.api.dependencies import require_workspace_user
+from src.domain.models.auth import AuthenticatedUser
 from src.services.price_history_service import build_price_history_insights
 from src.services.result_export_service import build_results_csv
 from src.services.result_file_service import (
@@ -15,6 +16,7 @@ from src.services.result_file_service import (
     validate_result_filename,
 )
 from src.services.result_storage_service import (
+    GLOBAL_TENANT_SCOPE,
     build_result_ndjson,
     delete_result_file_records,
     list_result_filenames,
@@ -46,34 +48,66 @@ def _build_download_headers(export_name: str) -> dict[str, str]:
     }
 
 
+def _tenant_scope_for_results(current_user: AuthenticatedUser):
+    if current_user.role == "tenant":
+        return current_user.tenant_id
+    return GLOBAL_TENANT_SCOPE
+
+
+def _resolve_results_scope(
+    current_user: AuthenticatedUser,
+    tenant_id: int | None = None,
+):
+    if current_user.role == "tenant":
+        return current_user.tenant_id
+    if tenant_id is None:
+        return GLOBAL_TENANT_SCOPE
+    return int(tenant_id)
+
+
 @router.get("/files")
-async def get_result_files():
+async def get_result_files(
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     """获取所有结果文件列表"""
-    return {"files": await list_result_filenames()}
+    return {"files": await list_result_filenames(_resolve_results_scope(current_user, tenant_id))}
 
 
 @router.get("/files/{filename:path}")
-async def download_result_file(filename: str):
+async def download_result_file(
+    filename: str,
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     """下载指定的结果文件"""
     if ".." in filename or filename.startswith("/"):
         return {"error": "非法的文件路径"}
-    if not filename.endswith(".jsonl") or not await result_file_exists(filename):
+    tenant_scope = _resolve_results_scope(current_user, tenant_id)
+    if not filename.endswith(".jsonl") or not await result_file_exists(filename, tenant_scope=tenant_scope):
         return {"error": "文件不存在"}
     return Response(
-        content=await build_result_ndjson(filename),
+        content=await build_result_ndjson(filename, tenant_scope=tenant_scope),
         media_type="application/x-ndjson",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
 @router.delete("/files/{filename:path}")
-async def delete_result_file(filename: str):
+async def delete_result_file(
+    filename: str,
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     """删除指定的结果文件"""
     if ".." in filename or filename.startswith("/"):
         raise HTTPException(status_code=400, detail="非法的文件路径")
     if not filename.endswith(".jsonl"):
         raise HTTPException(status_code=400, detail="只能删除 .jsonl 文件")
-    deleted_rows = await delete_result_file_records(filename)
+    deleted_rows = await delete_result_file_records(
+        filename,
+        tenant_scope=_resolve_results_scope(current_user, tenant_id),
+    )
     if deleted_rows <= 0:
         raise HTTPException(status_code=404, detail="文件不存在")
     return {"message": f"文件 {filename} 已成功删除"}
@@ -90,6 +124,8 @@ async def get_result_file_content(
     include_hidden: bool = Query(False),
     sort_by: str = Query("crawl_time"),
     sort_order: str = Query("desc"),
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """读取指定的 .jsonl 文件内容，支持分页、筛选和排序"""
     if ai_recommended_only and keyword_recommended_only:
@@ -98,6 +134,7 @@ async def get_result_file_content(
     if recommended_only and not ai_recommended_only and not keyword_recommended_only:
         ai_recommended_only = True
 
+    tenant_scope = _resolve_results_scope(current_user, tenant_id)
     try:
         validate_result_filename(filename)
         total_items, items = await query_result_records(
@@ -109,14 +146,19 @@ async def get_result_file_content(
             page=page,
             limit=limit,
             include_hidden=include_hidden,
+            tenant_scope=tenant_scope,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"读取结果文件时出错: {exc}")
-    if total_items <= 0 and not await result_file_exists(filename):
+    if total_items <= 0 and not await result_file_exists(filename, tenant_scope=tenant_scope):
         raise HTTPException(status_code=404, detail="结果文件未找到")
-    paginated_results = enrich_records_with_price_insight(items, filename)
+    paginated_results = enrich_records_with_price_insight(
+        items,
+        filename,
+        tenant_scope=tenant_scope,
+    )
 
     return {
         "total_items": total_items,
@@ -127,12 +169,21 @@ async def get_result_file_content(
 
 
 @router.get("/{filename}/insights")
-async def get_result_file_insights(filename: str):
+async def get_result_file_insights(
+    filename: str,
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     try:
         validate_result_filename(filename)
         keyword = filename.replace("_full_data.jsonl", "")
-        visible_item_ids = load_visible_result_item_ids(filename)
-        return build_price_history_insights(keyword, visible_item_ids=visible_item_ids)
+        tenant_scope = _resolve_results_scope(current_user, tenant_id)
+        visible_item_ids = load_visible_result_item_ids(filename, tenant_scope=tenant_scope)
+        return build_price_history_insights(
+            keyword,
+            visible_item_ids=visible_item_ids,
+            tenant_scope=tenant_scope,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -146,12 +197,15 @@ async def export_result_file_content(
     include_hidden: bool = Query(False),
     sort_by: str = Query("crawl_time"),
     sort_order: str = Query("desc"),
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     if ai_recommended_only and keyword_recommended_only:
         raise HTTPException(status_code=400, detail="AI推荐筛选与关键词推荐筛选不能同时开启。")
     if recommended_only and not ai_recommended_only and not keyword_recommended_only:
         ai_recommended_only = True
 
+    tenant_scope = _resolve_results_scope(current_user, tenant_id)
     try:
         validate_result_filename(filename)
         results = await load_all_result_records(
@@ -161,15 +215,20 @@ async def export_result_file_content(
             sort_by=sort_by,
             sort_order=sort_order,
             include_hidden=include_hidden,
+            tenant_scope=tenant_scope,
         )
         csv_text = build_results_csv(
-            enrich_records_with_price_insight(results, filename)
+            enrich_records_with_price_insight(
+                results,
+                filename,
+                tenant_scope=tenant_scope,
+            )
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"导出结果文件时出错: {exc}")
-    if not results and not await result_file_exists(filename):
+    if not results and not await result_file_exists(filename, tenant_scope=tenant_scope):
         raise HTTPException(status_code=404, detail="结果文件未找到")
 
     export_name = filename.replace(".jsonl", ".csv")
@@ -192,11 +251,22 @@ class BlacklistRulesRequest(BaseModel):
 
 
 @router.patch("/{filename}/items/{item_id}/status")
-async def patch_item_status(filename: str, item_id: str, body: UpdateStatusRequest):
+async def patch_item_status(
+    filename: str,
+    item_id: str,
+    body: UpdateStatusRequest,
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     """更新指定商品的状态（active/hidden/expired）"""
     try:
         validate_result_filename(filename)
-        updated = await update_item_status(filename, item_id, body.status.value)
+        updated = await update_item_status(
+            filename,
+            item_id,
+            body.status.value,
+            tenant_scope=_resolve_results_scope(current_user, tenant_id),
+        )
         if not updated:
             raise HTTPException(status_code=404, detail="商品未找到")
     except ValueError as exc:
@@ -205,20 +275,36 @@ async def patch_item_status(filename: str, item_id: str, body: UpdateStatusReque
 
 
 @router.get("/{filename}/blacklist-rules")
-async def get_result_blacklist_rules(filename: str):
+async def get_result_blacklist_rules(
+    filename: str,
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     try:
         validate_result_filename(filename)
-        keywords = await load_result_blacklist_keywords(filename)
+        keywords = await load_result_blacklist_keywords(
+            filename,
+            tenant_scope=_resolve_results_scope(current_user, tenant_id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"keywords": keywords}
 
 
 @router.put("/{filename}/blacklist-rules")
-async def put_result_blacklist_rules(filename: str, body: BlacklistRulesRequest):
+async def put_result_blacklist_rules(
+    filename: str,
+    body: BlacklistRulesRequest,
+    tenant_id: int | None = Query(default=None),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
+):
     try:
         validate_result_filename(filename)
-        keywords = await save_result_blacklist_keywords(filename, body.keywords)
+        keywords = await save_result_blacklist_keywords(
+            filename,
+            body.keywords,
+            tenant_scope=_resolve_results_scope(current_user, tenant_id),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"message": "黑名单规则已更新", "keywords": keywords}

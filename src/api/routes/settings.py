@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from src.api.dependencies import get_process_service
+from src.api.dependencies import get_process_service, require_admin_user
 from src.infrastructure.config.env_manager import env_manager
 from src.infrastructure.config.settings import (
     AISettings,
@@ -36,6 +36,14 @@ from src.services.notification_config_service import (
 )
 from src.services.notification_service import build_notification_service
 from src.services.process_service import ProcessService
+from src.services.auth_service import (
+    create_activation_codes,
+    get_tenant_detail,
+    list_activation_codes,
+    list_tenants,
+    update_tenant_access,
+)
+from src.domain.models.auth import AuthenticatedUser
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -119,6 +127,19 @@ class RotationSettingsModel(BaseModel):
     PROXY_BLACKLIST_TTL: Optional[int] = None
 
 
+class TenantAccessUpdateModel(BaseModel):
+    status: Optional[str] = None
+    ai_enabled: Optional[bool] = None
+    activation_required: Optional[bool] = None
+    extend_access_minutes: Optional[int] = Field(default=None, ge=1, le=525600)
+
+
+class ActivationCodeCreateModel(BaseModel):
+    quantity: int = Field(default=5, ge=1, le=100)
+    duration_minutes: int = Field(default=1440, ge=1, le=525600)
+    note: Optional[str] = None
+
+
 @router.get("/notifications")
 async def get_notification_settings():
     return build_notification_settings_response(load_notification_settings())
@@ -178,6 +199,64 @@ async def test_notification_settings(payload: NotificationTestRequest):
         "message": "测试通知已执行",
         "results": results,
     }
+
+
+@router.get("/tenants")
+async def get_tenant_access_settings(
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    return {"items": await list_tenants()}
+
+
+@router.patch("/tenants/{tenant_id}")
+async def patch_tenant_access_settings(
+    tenant_id: int,
+    payload: TenantAccessUpdateModel,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    try:
+        item = await update_tenant_access(
+            tenant_id,
+            status=payload.status,
+            ai_enabled=payload.ai_enabled,
+            activation_required=payload.activation_required,
+            extend_access_minutes=payload.extend_access_minutes,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"message": "租户权限已更新", "item": item}
+
+
+@router.get("/tenants/{tenant_id}")
+async def get_tenant_access_detail(
+    tenant_id: int,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    try:
+        return await get_tenant_detail(tenant_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/activation-codes")
+async def get_activation_codes(
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    return {"items": await list_activation_codes()}
+
+
+@router.post("/activation-codes")
+async def post_activation_codes(
+    payload: ActivationCodeCreateModel,
+    current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    items = await create_activation_codes(
+        quantity=payload.quantity,
+        duration_minutes=payload.duration_minutes,
+        note=payload.note,
+        created_by_user_id=current_user.user_id,
+    )
+    return {"message": "卡密已生成", "items": items}
 
 
 @router.get("/rotation")

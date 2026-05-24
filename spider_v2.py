@@ -30,6 +30,7 @@ async def main():
     )
     parser.add_argument("--debug-limit", type=int, default=0, help="调试模式：每个任务仅处理前 N 个新商品（0 表示无限制）")
     parser.add_argument("--config", type=str, help="指定任务配置文件路径（传入时优先读取 JSON）")
+    parser.add_argument("--task-id", type=int, help="只运行指定ID的单个任务 (用于任务进程调度)")
     parser.add_argument("--task-name", type=str, help="只运行指定名称的单个任务 (用于定时任务调度)")
     args = parser.parse_args()
 
@@ -152,13 +153,25 @@ async def main():
     if args.debug_limit > 0:
         print(f"** 调试模式已激活，每个任务最多处理 {args.debug_limit} 个新商品 **")
     
-    if args.task_name:
+    if args.task_id is not None:
+        print(f"** 定时任务模式：只执行任务 ID {args.task_id} **")
+    elif args.task_name:
         print(f"** 定时任务模式：只执行任务 '{args.task_name}' **")
 
     print("--------------------")
 
     active_task_configs = []
-    if args.task_name:
+    if args.task_id is not None:
+        task_found = next((task for task in tasks_config if task.get('id') == args.task_id), None)
+        if task_found:
+            if task_found.get("enabled", False):
+                active_task_configs.append(task_found)
+            else:
+                print(f"任务 ID {args.task_id} 已被禁用，跳过执行。")
+        else:
+            print(f"错误：在配置文件中未找到 ID 为 {args.task_id} 的任务。")
+            return
+    elif args.task_name:
         # 如果指定了任务名称，只查找该任务
         task_found = next((task for task in tasks_config if task.get('task_name') == args.task_name), None)
         if task_found:

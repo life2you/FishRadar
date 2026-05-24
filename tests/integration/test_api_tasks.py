@@ -1,6 +1,9 @@
 import asyncio
 import time
 
+from src.api import dependencies as deps
+from src.domain.models.auth import AuthenticatedUser
+
 
 def test_create_list_update_delete_task(api_client, api_context, sample_task_payload):
     response = api_client.post("/api/tasks/", json=sample_task_payload)
@@ -119,6 +122,38 @@ def test_generate_ai_task_returns_job_and_completes_async(api_client, api_contex
     assert latest_job["task"]["ai_prompt_criteria_file"].endswith("_criteria.txt")
     assert latest_job["task"]["analyze_images"] is False
     assert api_context["scheduler_service"].reload_calls == 1
+
+
+def test_tenant_without_ai_permission_cannot_create_ai_task(api_client, api_context):
+    async def override_workspace_user():
+        return AuthenticatedUser(
+            user_id=2,
+            username="tenant_a",
+            role="tenant",
+            tenant_id=99,
+            tenant_name="Tenant A",
+            tenant_status="active",
+            tenant_ai_enabled=False,
+            tenant_activation_required=False,
+            tenant_activated_at="2026-01-01T00:00:00",
+        )
+
+    api_context["app"].dependency_overrides[deps.require_workspace_user] = override_workspace_user
+
+    response = api_client.post(
+        "/api/tasks/generate",
+        json={
+            "task_name": "Tenant AI Blocked",
+            "keyword": "macbook air",
+            "description": "只看 16G 内存版本",
+            "decision_mode": "ai",
+            "max_pages": 1,
+            "personal_only": True,
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "当前租户未开通 AI 分析能力"
 
 
 def test_create_task_accepts_cron_alias(api_client, sample_task_payload):

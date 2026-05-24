@@ -1,4 +1,52 @@
 const enUSExtra = {
+  tenantPortal: {
+    eyebrow: 'Tenant Space',
+    badge: 'Tenant Portal',
+    signedInAs: 'Signed in as',
+    expiryLabel: 'Expires',
+    signOut: 'Sign out',
+    nav: {
+      tasks: 'Task Studio',
+      results: 'Result Intel',
+    },
+    note: 'Everything you see here belongs only to the current tenant, including tasks, result sets, and filtering rules.',
+    tasks: {
+      title: '{tenant} monitoring workspace',
+      description: 'Task creation, tuning, and execution controls are gathered into one focused portal so daily work stays simple and fast.',
+      queueTitle: 'Task Queue',
+      queueDescription: 'All monitoring tasks for the current tenant live here. Start, pause, or refine them without leaving this workspace.',
+      stats: {
+        enabled: 'Enabled Tasks',
+        running: 'Running Now',
+        keyword: 'Keyword Tasks',
+        scheduled: 'Scheduled Tasks',
+      },
+      details: {
+        enabled: 'Ready for manual runs or scheduler pickup',
+        running: 'Currently scanning in the background',
+        keyword: 'Recommend items through keyword hits',
+        scheduled: 'Configured with a recurring schedule',
+      },
+    },
+    results: {
+      title: '{tenant} result intelligence',
+      description: 'Recent scans, recommended matches, and price context are presented together so you can quickly decide what deserves follow-up.',
+      workspaceTitle: 'Result Workspace',
+      workspaceDescription: 'Choose a result set first, then narrow it down with sorting, blacklist rules, and export tools.',
+      stats: {
+        files: 'Result Boards',
+        items: 'Visible Items',
+        recommended: 'Recommended',
+        hidden: 'Hidden',
+      },
+      details: {
+        files: 'Result sets visible to this tenant',
+        items: 'Visible records in the current result set',
+        recommended: 'Items recommended by AI or keyword rules',
+        hidden: 'Items hidden manually or by blacklist rules',
+      },
+    },
+  },
   tasks: {
     title: 'Tasks',
     toasts: {
@@ -157,11 +205,20 @@ const enUSExtra = {
     proxy: { title: 'Proxy Rotation', description: 'The proxy pool stays independently controlled and can stack with account rotation.', pool: 'Proxy Pool (comma separated)' },
   },
   accounts: {
-    title: 'Goofish Accounts',
-    description: 'Use the Chrome extension to extract login-state JSON and add accounts here.',
+    title: 'Account Pool',
+    description: 'Maintain the platform account pool so tenant tasks have stable login resources.',
+    hero: {
+      panelLabel: 'Resource pool purpose',
+      panelDescription: 'The account pool belongs to the admin console only. Maintain session state, import flows, and rotation readiness here to support tenant workloads.',
+      cards: {
+        total: 'Pool size',
+        rotation: 'Rotation readiness',
+        guide: 'Import flow',
+      },
+    },
     add: '+ Add Account',
     cookieGuide: {
-      title: 'How to Get Goofish Cookies',
+      title: 'Import Account Login State',
       step1Prefix: 'Install the',
       extension: 'Goofish Login State Extractor',
       step2Prefix: 'Open and sign in to',
@@ -171,8 +228,8 @@ const enUSExtra = {
       step5: 'If you manage multiple accounts, do not log out in the current window; use an incognito window to capture another account cookie.',
     },
     list: {
-      title: 'Account List',
-      description: 'Account files are stored under state/ and can be assigned to tasks.',
+      title: 'Account Pool List',
+      description: 'Account files are stored under state/ and can be assigned by admins to tasks.',
       name: 'Account Name',
       file: 'State File',
       actions: 'Actions',
@@ -182,14 +239,14 @@ const enUSExtra = {
       delete: 'Delete',
     },
     createDialog: {
-      title: 'Add Goofish Account',
+      title: 'Add Account to Pool',
       description: 'Paste the JSON extracted by the Chrome extension.',
       name: 'Account Name',
       namePlaceholder: 'Example: acc_1',
       jsonContent: 'JSON Content',
       jsonPlaceholder: 'Paste login-state JSON...',
     },
-    editDialog: { title: 'Update Account: {name}', description: 'Replace the account login-state JSON.' },
+    editDialog: { title: 'Update Account: {name}', description: 'Replace the login-state JSON stored in the account pool.' },
     deleteDialog: { title: 'Delete Account', description: 'Delete account {name}? This action cannot be undone.', deleting: 'Deleting...' },
     toasts: {
       loadFailed: 'Failed to load accounts.',

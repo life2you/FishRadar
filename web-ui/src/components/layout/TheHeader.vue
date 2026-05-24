@@ -4,13 +4,20 @@ import { useRoute, useRouter } from 'vue-router'
 import { Button } from '@/components/ui/button'
 import DashboardTaskSearch from '@/components/layout/DashboardTaskSearch.vue'
 import LocaleToggle from '@/components/layout/LocaleToggle.vue'
+import { useAuth } from '@/composables/useAuth'
 import { 
-  Zap, 
-  Bell, 
+  Shield, 
+  Building2,
   Search, 
   UserCircle,
-  HelpCircle,
-  Menu
+  Settings2,
+  Menu,
+  Layers3,
+  ListTodo,
+  LogOut,
+  Radar,
+  Clock3,
+  ScrollText,
 } from 'lucide-vue-next'
 import Badge from '@/components/ui/badge/Badge.vue'
 import { useMobileNav } from '@/composables/useMobileNav'
@@ -19,40 +26,178 @@ import { useI18n } from 'vue-i18n'
 const router = useRouter()
 const route = useRoute()
 const { toggleMobileNav } = useMobileNav()
+const { role, homePath, tenantName, username, workspaceEnabled, tenantAccessExpiresAt, logout } = useAuth()
 const inactiveSearchValue = ref('')
 const { t } = useI18n()
 
-const isDashboard = computed(() => route.name === 'Dashboard')
+const isDashboard = computed(() => route.name === 'Dashboard' && role.value === 'admin')
+const isAdmin = computed(() => role.value === 'admin')
+const isTenant = computed(() => role.value === 'tenant')
+const tenantTitle = computed(() => tenantName.value || username.value || t('common.unnamed'))
+const tenantExpiryLabel = computed(() => {
+  if (!tenantAccessExpiresAt.value || !workspaceEnabled.value) {
+    return ''
+  }
+  const parsed = new Date(tenantAccessExpiresAt.value)
+  if (Number.isNaN(parsed.getTime())) {
+    return tenantAccessExpiresAt.value
+  }
+  return parsed.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+})
+const isTenantExpirySoon = computed(() => {
+  if (!tenantAccessExpiresAt.value || !workspaceEnabled.value) {
+    return false
+  }
+  const parsed = new Date(tenantAccessExpiresAt.value)
+  if (Number.isNaN(parsed.getTime())) {
+    return false
+  }
+  return parsed.getTime() - Date.now() <= 1000 * 60 * 60 * 24
+})
+const tenantNavItems = computed(() => {
+  if (!workspaceEnabled.value) {
+    return [
+      {
+        to: '/activate',
+        name: 'Activate',
+        label: t('routes.activate'),
+        icon: Radar,
+      },
+    ]
+  }
+  return [
+    {
+      to: '/tasks',
+      name: 'Tasks',
+      label: t('tenantPortal.nav.tasks'),
+      icon: ListTodo,
+    },
+    {
+      to: '/results',
+      name: 'Results',
+      label: t('tenantPortal.nav.results'),
+      icon: Layers3,
+    },
+  ]
+})
+const currentRouteName = computed(() => typeof route.name === 'string' ? route.name : '')
 
 function goAccounts() {
   router.push('/accounts')
 }
 
-function goNotifications() {
-  router.push({ name: 'Settings', query: { tab: 'notifications' } })
+function goTenants() {
+  router.push('/tenants')
 }
 
-function goPrompts() {
-  router.push({ name: 'Settings', query: { tab: 'prompts' } })
+function goSettings() {
+  router.push('/settings')
+}
+
+function goLogs() {
+  router.push('/logs')
+}
+
+function handleLogout() {
+  logout()
 }
 </script>
 
 <template>
-  <header class="flex items-center justify-between px-6 h-16 bg-white/60 backdrop-blur-md border-b border-slate-200/60 sticky top-0 z-[100]">
+  <header
+    v-if="isTenant"
+    class="sticky top-0 z-[100] border-b border-[#eadfce]/90 bg-[linear-gradient(180deg,rgba(252,247,239,0.96)_0%,rgba(249,243,233,0.94)_100%)] backdrop-blur-xl"
+  >
+    <div class="mx-auto flex max-w-[1320px] flex-col gap-5 px-4 py-4 md:px-8">
+      <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+        <RouterLink
+          :to="homePath"
+          class="flex items-center gap-3 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+          :aria-label="t('header.goHome')"
+        >
+          <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#221710_0%,#6f4124_55%,#c48c3b_100%)] shadow-[0_18px_42px_rgba(86,52,28,0.26)]">
+            <Radar class="h-5 w-5 text-white" />
+          </div>
+          <div>
+            <p class="text-xs font-black uppercase tracking-[0.3em] text-[#927454]">
+              CatchYu
+            </p>
+            <h1 class="text-lg font-black tracking-tight text-[#241a12]">
+              {{ tenantTitle }}
+            </h1>
+          </div>
+        </RouterLink>
+
+        <div class="flex flex-wrap items-center gap-2 md:justify-end">
+          <div
+            v-if="tenantExpiryLabel"
+            class="rounded-full border px-3 py-1.5 text-xs shadow-sm"
+            :class="isTenantExpirySoon
+              ? 'border-[#e8d8bb] bg-[#fff7e8] text-[#8b6232]'
+              : 'border-[#ece2d3] bg-white/72 text-[#7a6551]'"
+          >
+            <span class="inline-flex items-center gap-1.5">
+              <Clock3 class="h-3.5 w-3.5" />
+              <span class="font-medium">{{ t('tenantPortal.expiryLabel') }}</span>
+              <span class="font-semibold">{{ tenantExpiryLabel }}</span>
+            </span>
+          </div>
+          <div class="rounded-full border border-[#e1d4c3] bg-white/80 px-3 py-1.5 text-xs text-[#6d5846] shadow-sm">
+            <span class="font-semibold text-[#927454]">{{ t('tenantPortal.signedInAs') }}</span>
+            <span class="ml-2 font-black text-[#2c2016]">{{ username }}</span>
+          </div>
+          <LocaleToggle />
+          <Button
+            variant="outline"
+            class="rounded-full border-[#dfd2c1] bg-white/80 text-[#473122] hover:bg-white"
+            @click="handleLogout"
+          >
+            <LogOut class="h-4 w-4" />
+            {{ t('tenantPortal.signOut') }}
+          </Button>
+        </div>
+      </div>
+
+      <nav class="flex flex-wrap gap-2">
+        <RouterLink
+          v-for="item in tenantNavItems"
+          :key="item.to"
+          :to="item.to"
+          class="group inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold transition-all"
+          :class="currentRouteName === item.name
+            ? 'border-[#221710] bg-[#221710] text-white shadow-[0_12px_30px_rgba(34,23,16,0.18)]'
+            : 'border-[#e1d6c8] bg-white/74 text-[#6a5744] hover:border-[#d1c0ab] hover:bg-white hover:text-[#241a12]'"
+        >
+          <component :is="item.icon" class="h-4 w-4" />
+          {{ item.label }}
+        </RouterLink>
+      </nav>
+    </div>
+  </header>
+
+  <header v-else class="flex items-center justify-between px-6 h-16 bg-white/60 backdrop-blur-md border-b border-slate-200/60 sticky top-0 z-[100]">
     <!-- Brand Logo -->
     <RouterLink
-      to="/dashboard"
+      :to="homePath"
       class="flex items-center gap-2 group rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
       :aria-label="t('header.goHome')"
     >
-      <div class="w-8 h-8 rounded-lg bg-primary flex items-center justify-center shadow-lg shadow-primary/20 transition-transform group-hover:rotate-12">
-        <Zap class="w-5 h-5 text-white fill-white" />
+      <div class="flex h-9 w-9 items-center justify-center rounded-xl bg-[linear-gradient(135deg,#08111f_0%,#163256_58%,#4f7fa8_100%)] shadow-[0_14px_34px_rgba(8,17,31,0.24)] transition-transform group-hover:-rotate-6">
+        <Shield class="h-5 w-5 text-white" />
       </div>
-      <h1 class="text-lg font-black text-slate-800 tracking-tighter">
-        AI <span class="text-primary">Xianyu</span> Hunter
-      </h1>
-      <Badge variant="outline" class="ml-2 text-[10px] font-bold border-primary/20 text-primary bg-primary/5 uppercase tracking-widest hidden sm:flex">
-        PRO
+      <div class="flex flex-col">
+        <span class="text-[10px] font-black uppercase tracking-[0.3em] text-slate-400">CatchYu</span>
+        <h1 class="text-lg font-black tracking-tight text-slate-900">
+          Console
+        </h1>
+      </div>
+      <Badge variant="outline" class="ml-2 hidden border-slate-300 bg-slate-100/80 text-[10px] font-bold uppercase tracking-widest text-slate-600 sm:flex">
+        Admin
       </Badge>
     </RouterLink>
 
@@ -81,40 +226,50 @@ function goPrompts() {
         <LocaleToggle />
       </div>
 
-      <div class="flex items-center gap-1 sm:gap-2">
+      <div v-if="isAdmin" class="flex items-center gap-1 sm:gap-2">
          <Button
            variant="ghost"
            size="icon"
-           class="rounded-full text-slate-500 hover:text-primary hover:bg-primary/10"
-           :aria-label="t('header.openNotifications')"
-           @click="goNotifications"
+           class="rounded-full text-slate-500 hover:bg-slate-900/10 hover:text-slate-900"
+           :aria-label="t('header.openTenants')"
+           @click="goTenants"
          >
-            <Bell class="w-5 h-5" />
+            <Building2 class="w-5 h-5" />
          </Button>
          <Button
            variant="ghost"
            size="icon"
-           class="rounded-full text-slate-500 hover:text-primary hover:bg-primary/10"
-           :aria-label="t('header.openPrompts')"
-           @click="goPrompts"
+           class="rounded-full text-slate-500 hover:bg-slate-900/10 hover:text-slate-900"
+           :aria-label="t('header.openLogs')"
+           @click="goLogs"
          >
-            <HelpCircle class="w-5 h-5" />
+            <ScrollText class="w-5 h-5" />
+         </Button>
+         <Button
+           variant="ghost"
+           size="icon"
+           class="rounded-full text-slate-500 hover:bg-slate-900/10 hover:text-slate-900"
+           :aria-label="t('header.openSettings')"
+           @click="goSettings"
+         >
+            <Settings2 class="w-5 h-5" />
          </Button>
       </div>
       
-      <div class="h-6 w-px bg-slate-200 mx-1 hidden sm:block"></div>
+      <div v-if="isAdmin" class="h-6 w-px bg-slate-200 mx-1 hidden sm:block"></div>
 
       <Button 
+        v-if="isAdmin"
         variant="ghost" 
         class="hidden sm:flex items-center gap-2 pl-2 pr-4 rounded-full hover:bg-slate-100 transition-all active:scale-95"
         :aria-label="t('header.openAccounts')"
         @click="goAccounts"
       >
-        <div class="w-8 h-8 rounded-full bg-slate-200 flex items-center justify-center overflow-hidden border border-slate-300 shadow-sm">
+        <div class="flex h-8 w-8 items-center justify-center overflow-hidden rounded-full border border-slate-300 bg-slate-200 shadow-sm">
            <UserCircle class="w-6 h-6 text-slate-500" />
         </div>
         <div class="text-left hidden lg:block">
-           <p class="text-xs font-black text-slate-700 leading-none mb-0.5">Xianyu Admin</p>
+           <p class="mb-0.5 text-xs font-black leading-none text-slate-700">CatchYu Admin</p>
            <p class="text-[10px] text-slate-400 font-medium">{{ t('header.accountManagement') }}</p>
         </div>
       </Button>

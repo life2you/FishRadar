@@ -20,7 +20,7 @@ const routes = [
         path: 'dashboard',
         name: 'Dashboard',
         component: () => import('@/views/DashboardView.vue'),
-        meta: { titleKey: 'routes.dashboard', requiresAuth: true },
+        meta: { titleKey: 'routes.dashboard', requiresAuth: true, allowedRoles: ['admin'] },
       },
       {
         path: 'tasks',
@@ -29,10 +29,28 @@ const routes = [
         meta: { titleKey: 'routes.tasks', requiresAuth: true },
       },
       {
+        path: 'activate',
+        name: 'Activate',
+        component: () => import('@/views/TenantActivationView.vue'),
+        meta: { titleKey: 'routes.activate', requiresAuth: true, allowedRoles: ['tenant'] },
+      },
+      {
         path: 'accounts',
         name: 'Accounts',
         component: () => import('@/views/AccountsView.vue'),
-        meta: { titleKey: 'routes.accounts', requiresAuth: true },
+        meta: { titleKey: 'routes.accounts', requiresAuth: true, allowedRoles: ['admin'] },
+      },
+      {
+        path: 'tenants',
+        name: 'Tenants',
+        component: () => import('@/views/TenantsView.vue'),
+        meta: { titleKey: 'routes.tenants', requiresAuth: true, allowedRoles: ['admin'] },
+      },
+      {
+        path: 'tenants/:tenantId',
+        name: 'TenantDetail',
+        component: () => import('@/views/TenantDetailView.vue'),
+        meta: { titleKey: 'routes.tenantDetail', requiresAuth: true, allowedRoles: ['admin'] },
       },
       {
         path: 'results',
@@ -44,13 +62,13 @@ const routes = [
         path: 'logs',
         name: 'Logs',
         component: () => import('@/views/LogsView.vue'),
-        meta: { titleKey: 'routes.logs', requiresAuth: true },
+        meta: { titleKey: 'routes.logs', requiresAuth: true, allowedRoles: ['admin'] },
       },
       {
         path: 'settings',
         name: 'Settings',
         component: () => import('@/views/SettingsView.vue'),
-        meta: { titleKey: 'routes.settings', requiresAuth: true },
+        meta: { titleKey: 'routes.settings', requiresAuth: true, allowedRoles: ['admin'] },
       },
     ],
   },
@@ -75,16 +93,29 @@ function updateDocumentTitle() {
   document.title = titleKey ? `${t(titleKey)} - ${appName}` : appName
 }
 
-router.beforeEach((to, _from, next) => {
-  const { isAuthenticated } = useAuth()
+router.beforeEach(async (to, _from, next) => {
+  const { isAuthenticated, ensureSession, canAccessRoute, homePath } = useAuth()
+
+  if (to.meta.requiresAuth || to.name === 'Login') {
+    await ensureSession()
+  }
 
   if (to.meta.requiresAuth && !isAuthenticated.value) {
     next({ name: 'Login', query: { redirect: to.fullPath } })
-  } else if (to.name === 'Login' && isAuthenticated.value) {
-    next({ name: 'Dashboard' })
-  } else {
-    next()
+    return
   }
+
+  if (to.name === 'Login' && isAuthenticated.value) {
+    next(homePath.value)
+    return
+  }
+
+  if (to.meta.requiresAuth && !canAccessRoute(typeof to.name === 'string' ? to.name : null)) {
+    next(homePath.value)
+    return
+  }
+
+  next()
 })
 
 router.afterEach(() => {

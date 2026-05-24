@@ -59,8 +59,7 @@ docker compose up -d
 
 ### 数据存储与迁移
 
-- 当前在线主存储推荐为 MySQL，可通过 `APP_DATABASE_URL` 配置
-- 若未设置 `APP_DATABASE_URL`，则会回退到 SQLite，默认路径 `data/app.sqlite3`
+- 当前版本仅支持 MySQL，必须通过 `APP_DATABASE_URL` 配置
 - 应用启动时会自动建库建表，并尝试从旧的 `config.json`、`jsonl/`、`price_history/` 导入一次历史数据
 - `state/`、`prompts/`、`logs/`、`images/` 仍然是文件系统目录，不在数据库中
 - 商品图片会临时落到 `images/task_images_<task_name>/`，任务结束后默认会清理
@@ -73,7 +72,7 @@ docker compose up -d
 | `OPENAI_API_KEY` | AI 模型 API Key | 是 |
 | `OPENAI_BASE_URL` | OpenAI 兼容接口地址 | 是 |
 | `OPENAI_MODEL_NAME` | 支持图片输入的模型名称 | 是 |
-| `APP_DATABASE_URL` | MySQL 连接串，推荐配置 | 否 |
+| `APP_DATABASE_URL` | MySQL 连接串 | 是 |
 | `WEB_USERNAME` / `WEB_PASSWORD` | Web UI 登录账号密码，默认 `admin/admin123` | 否 |
 
 其余配置见下方“配置说明”。
@@ -163,7 +162,7 @@ npm run dev
 
 - FastAPI 启动时会自动初始化数据库，并在首次启动时尝试导入旧的 `config.json/jsonl/price_history`
 - `spider_v2.py` 默认从数据库读取任务；只有显式传入 `--config <path>` 时才会走 JSON 配置兼容模式
-- 推荐使用 `APP_DATABASE_URL` 连接 MySQL；未配置时默认数据库路径为 `data/app.sqlite3`
+- 必须通过 `APP_DATABASE_URL` 连接 MySQL
 - Vite 开发服务器会将 `/api`、`/auth`、`/ws` 代理到 `http://127.0.0.1:8000`。
 - `npm run build` 先生成 `web-ui/dist/`，`start.sh` 再复制到仓库根目录 `dist/`。
 - FastAPI 负责提供根目录 `dist/index.html` 和 `dist/assets/`。
@@ -198,7 +197,6 @@ cd web-ui && npm run build
 
 - `OPENAI_API_KEY` / `OPENAI_BASE_URL` / `OPENAI_MODEL_NAME`：AI 模型接入必填项。
 - `APP_DATABASE_URL`：MySQL 连接串，格式如 `mysql://user:pass@host:3306/dbname?charset=utf8mb4`。
-- `APP_DATABASE_FILE`：未配置 `APP_DATABASE_URL` 时的 SQLite 文件路径。
 - `PROXY_URL`：为 AI 请求单独指定 HTTP/SOCKS5 代理。
 - `RUN_HEADLESS`：是否以无头模式运行爬虫；Docker 中应保持 `true`。
 - `SERVER_PORT`：后端监听端口，默认 `8000`。

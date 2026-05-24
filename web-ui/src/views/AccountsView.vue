@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { KeyRound, RefreshCcw, ShieldCheck, Users2 } from 'lucide-vue-next'
 import { listAccounts, getAccount, createAccount, updateAccount, deleteAccount, type AccountItem } from '@/api/accounts'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -27,6 +28,27 @@ const newContent = ref('')
 const editName = ref('')
 const editContent = ref('')
 const deleteName = ref('')
+
+const heroCards = computed(() => [
+  {
+    icon: Users2,
+    label: t('accounts.hero.cards.total'),
+    value: isLoading.value ? t('common.loading') : String(accounts.value.length),
+    detail: t('accounts.list.description'),
+  },
+  {
+    icon: RefreshCcw,
+    label: t('accounts.hero.cards.rotation'),
+    value: t('rotation.title'),
+    detail: t('rotation.description'),
+  },
+  {
+    icon: ShieldCheck,
+    label: t('accounts.hero.cards.guide'),
+    value: t('accounts.cookieGuide.title'),
+    detail: t('accounts.cookieGuide.step4'),
+  },
+])
 
 async function fetchAccounts() {
   isLoading.value = true
@@ -122,14 +144,37 @@ onMounted(fetchAccounts)
 </script>
 
 <template>
-  <div>
-    <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-      <div>
-        <h1 class="text-2xl font-bold text-gray-800">{{ t('accounts.title') }}</h1>
-        <p class="text-sm text-gray-500 mt-1">{{ t('accounts.description') }}</p>
+  <div class="space-y-6">
+    <section class="overflow-hidden rounded-[32px] border border-slate-200/80 bg-[linear-gradient(135deg,#09121f_0%,#18324d_44%,#d8e4ef_220%)] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.18)] md:px-8">
+      <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+        <div class="max-w-3xl">
+          <p class="text-xs font-black uppercase tracking-[0.32em] text-slate-300">CatchYu Console</p>
+          <h1 class="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">{{ t('accounts.title') }}</h1>
+          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300 md:text-base">{{ t('accounts.description') }}</p>
+        </div>
+        <div class="rounded-[28px] border border-white/10 bg-white/10 px-5 py-4 backdrop-blur xl:max-w-sm">
+          <p class="text-xs font-black uppercase tracking-[0.24em] text-slate-400">{{ t('accounts.hero.panelLabel') }}</p>
+          <p class="mt-2 text-sm leading-7 text-slate-200">{{ t('accounts.hero.panelDescription') }}</p>
+          <Button class="mt-4 w-full justify-center bg-white text-slate-900 hover:bg-slate-100 sm:w-auto" @click="openCreateDialog">
+            <KeyRound class="mr-2 h-4 w-4" />
+            {{ t('accounts.add') }}
+          </Button>
+        </div>
       </div>
-      <Button class="w-full sm:w-auto" @click="openCreateDialog">{{ t('accounts.add') }}</Button>
-    </div>
+
+      <div class="mt-6 grid gap-3 md:grid-cols-3">
+        <article
+          v-for="card in heroCards"
+          :key="card.label"
+          class="rounded-[24px] border border-white/10 bg-white/10 p-4 backdrop-blur"
+        >
+          <component :is="card.icon" class="h-5 w-5 text-[#a6d0ff]" />
+          <p class="mt-4 text-xs font-black uppercase tracking-[0.22em] text-slate-400">{{ card.label }}</p>
+          <p class="mt-3 text-lg font-black text-white">{{ card.value }}</p>
+          <p class="mt-2 text-sm leading-6 text-slate-300">{{ card.detail }}</p>
+        </article>
+      </div>
+    </section>
 
     <Card class="app-surface mb-6 border-none">
       <CardHeader>

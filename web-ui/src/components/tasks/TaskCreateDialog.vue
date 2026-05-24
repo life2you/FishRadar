@@ -22,6 +22,7 @@ const { t } = useI18n()
 
 const props = defineProps<{
   accountOptions?: { name: string; path: string }[]
+  allowFixedAccount?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -133,6 +134,7 @@ watch(pollingError, (value) => {
       <TaskForm
         mode="create"
         :account-options="accountOptions"
+        :allow-fixed-account="allowFixedAccount"
         :default-account="defaultAccountPath"
         :default-values="defaultValues"
         @submit="(data) => handleCreateTask(data as TaskGenerateRequest)"

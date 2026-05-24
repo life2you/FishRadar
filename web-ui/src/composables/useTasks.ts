@@ -1,4 +1,5 @@
-import { ref, onMounted } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import type {
   Task,
   TaskCreateResponse,
@@ -7,13 +8,27 @@ import type {
 } from '@/types/task.d.ts'
 import * as taskApi from '@/api/tasks'
 import { useWebSocket } from '@/composables/useWebSocket'
+import { useAuth } from '@/composables/useAuth'
 
 export function useTasks() {
+  const route = useRoute()
+  const { role } = useAuth()
   const tasks = ref<Task[]>([])
   const isLoading = ref(false)
   const error = ref<Error | null>(null)
   const stoppingTaskIds = ref<Set<number>>(new Set())
   const { on } = useWebSocket()
+  const adminTenantId = computed(() => {
+    if (role.value !== 'admin') {
+      return null
+    }
+    const raw = route.query.tenant_id
+    if (typeof raw !== 'string') {
+      return null
+    }
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : null
+  })
 
   async function fetchTasks(options?: { silent?: boolean }) {
     if (!options?.silent) {
@@ -21,7 +36,7 @@ export function useTasks() {
     }
     error.value = null
     try {
-      tasks.value = await taskApi.getAllTasks()
+      tasks.value = await taskApi.getAllTasks(adminTenantId.value)
     } catch (e) {
       if (e instanceof Error) {
         error.value = e
@@ -33,6 +48,10 @@ export function useTasks() {
       }
     }
   }
+
+  watch(() => route.query.tenant_id, () => {
+    fetchTasks()
+  })
 
   // Real-time updates
   on('tasks_updated', () => {

@@ -110,6 +110,7 @@ class Task(BaseModel):
     model_config = ConfigDict(use_enum_values=True, extra="ignore")
 
     id: Optional[int] = None
+    tenant_id: Optional[int] = None
     task_name: str
     enabled: bool
     keyword: str
@@ -160,6 +161,7 @@ class TaskCreate(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    tenant_id: Optional[int] = None
     task_name: str
     enabled: bool = True
     keyword: str
@@ -227,6 +229,7 @@ class TaskUpdate(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    tenant_id: Optional[int] = None
     task_name: Optional[str] = None
     enabled: Optional[bool] = None
     keyword: Optional[str] = None
@@ -294,6 +297,7 @@ class TaskGenerateRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    tenant_id: Optional[int] = None
     task_name: str
     keyword: str
     description: Optional[str] = ""

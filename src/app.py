@@ -3,9 +3,12 @@
 整合所有路由和服务
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+import os
+
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
+from pydantic import BaseModel
 
 from src.api.routes import (
     dashboard,
@@ -19,15 +22,27 @@ from src.api.routes import (
     accounts,
 )
 from src.api.dependencies import (
+    get_current_user,
+    require_admin_user,
     set_process_service,
     set_scheduler_service,
     set_task_generation_service,
 )
+from src.domain.models.auth import AuthenticatedUser
 from src.services.task_service import TaskService
 from src.services.process_service import ProcessService
 from src.services.scheduler_service import SchedulerService
 from src.services.task_log_cleanup_service import cleanup_task_logs
 from src.services.task_generation_service import TaskGenerationService
+from src.services.auth_service import (
+    AUTH_SESSION_COOKIE,
+    SESSION_TTL_DAYS,
+    authenticate_credentials,
+    create_session,
+    delete_session,
+    redeem_activation_code,
+    register_tenant_user,
+)
 from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
 from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
 from src.infrastructure.config.settings import settings as app_settings
@@ -48,6 +63,7 @@ async def _sync_task_runtime_status(task_id: int, is_running: bool) -> None:
     await websocket.broadcast_message(
         "task_status_changed",
         {"id": task_id, "is_running": is_running},
+        tenant_scope=task.tenant_id,
     )
 
 
@@ -104,14 +120,32 @@ app = FastAPI(
 
 # 注册路由
 app.include_router(tasks.router)
-app.include_router(dashboard.router)
-app.include_router(logs.router)
-app.include_router(settings.router)
-app.include_router(prompts.router)
+app.include_router(
+    dashboard.router,
+    dependencies=[Depends(require_admin_user)],
+)
+app.include_router(
+    logs.router,
+    dependencies=[Depends(require_admin_user)],
+)
+app.include_router(
+    settings.router,
+    dependencies=[Depends(require_admin_user)],
+)
+app.include_router(
+    prompts.router,
+    dependencies=[Depends(require_admin_user)],
+)
 app.include_router(results.router)
-app.include_router(login_state.router)
+app.include_router(
+    login_state.router,
+    dependencies=[Depends(require_admin_user)],
+)
 app.include_router(websocket.router)
-app.include_router(accounts.router)
+app.include_router(
+    accounts.router,
+    dependencies=[Depends(require_admin_user)],
+)
 
 # 挂载静态文件
 # 旧的静态文件目录（用于截图等）
@@ -119,7 +153,6 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # 挂载 Vue 3 前端构建产物
 # 注意：需要在所有 API 路由之后挂载，以避免覆盖 API 路由
-import os
 if os.path.exists("dist"):
     app.mount("/assets", StaticFiles(directory="dist/assets"), name="assets")
 
@@ -131,27 +164,131 @@ async def health_check():
     return {"status": "healthy", "message": "服务正常运行"}
 
 
-# 认证状态检查端点
-from fastapi import Request, HTTPException
-from fastapi.responses import FileResponse
-from pydantic import BaseModel
-
 class LoginRequest(BaseModel):
     username: str
     password: str
 
 
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    tenant_name: str
+    display_name: str | None = None
+
+
+class ActivationRequest(BaseModel):
+    code: str
+
+
+def _auth_payload(user: AuthenticatedUser) -> dict:
+    return {
+        "authenticated": True,
+        "username": user.username,
+        "display_name": user.display_name,
+        "role": user.role,
+        "tenant_id": user.tenant_id,
+        "tenant_name": user.tenant_name,
+        "tenant_status": user.tenant_status,
+        "workspace_enabled": user.workspace_enabled,
+        "tenant_ai_enabled": user.tenant_ai_enabled,
+        "tenant_activation_required": user.tenant_activation_required,
+        "tenant_activated": user.activated,
+        "tenant_activated_at": user.tenant_activated_at,
+        "tenant_access_expires_at": user.tenant_access_expires_at,
+        "tenant_access_expired": user.access_expired,
+        "can_use_ai": user.can_use_ai,
+        "allowed_routes": user.allowed_routes,
+    }
+
+
+def _set_auth_cookie(response: Response, session_token: str) -> None:
+    response.set_cookie(
+        key=AUTH_SESSION_COOKIE,
+        value=session_token,
+        max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+def _clear_auth_cookie(response: Response) -> None:
+    response.delete_cookie(
+        key=AUTH_SESSION_COOKIE,
+        httponly=True,
+        samesite="lax",
+    )
+
+
+@app.post("/auth/login")
+async def login(payload: LoginRequest, response: Response):
+    """执行用户名密码登录并写入会话 Cookie。"""
+    user = await authenticate_credentials(payload.username, payload.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="认证失败")
+    session_token = await create_session(user)
+    _set_auth_cookie(response, session_token)
+    return _auth_payload(user)
+
+
 @app.post("/auth/status")
-async def auth_status(payload: LoginRequest):
-    """检查认证状态"""
-    if payload.username == app_settings.web_username and payload.password == app_settings.web_password:
-        return {"authenticated": True, "username": payload.username}
-    raise HTTPException(status_code=401, detail="认证失败")
+async def auth_status(payload: LoginRequest, response: Response):
+    """兼容旧前端路径，等价于登录接口。"""
+    return await login(payload, response)
+
+
+@app.post("/auth/register")
+async def register(payload: RegisterRequest, response: Response):
+    """注册新的租户账号并自动登录到激活流程。"""
+    try:
+        user = await register_tenant_user(
+            username=payload.username,
+            password=payload.password,
+            tenant_name=payload.tenant_name,
+            display_name=payload.display_name,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    session_token = await create_session(user)
+    _set_auth_cookie(response, session_token)
+    return _auth_payload(user)
+
+
+@app.get("/auth/me")
+async def auth_me(
+    current_user: AuthenticatedUser | None = Depends(get_current_user),
+):
+    """返回当前登录会话的用户信息。"""
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    return _auth_payload(current_user)
+
+
+@app.post("/auth/activate")
+async def activate_tenant(
+    payload: ActivationRequest,
+    current_user: AuthenticatedUser = Depends(get_current_user),
+):
+    """租户使用卡密激活当前工作台。"""
+    if current_user is None:
+        raise HTTPException(status_code=401, detail="未登录或登录已过期")
+    try:
+        user = await redeem_activation_code(payload.code, current_user)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _auth_payload(user)
+
+
+@app.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    """退出当前会话。"""
+    session_token = request.cookies.get(AUTH_SESSION_COOKIE)
+    if session_token:
+        await delete_session(session_token)
+    _clear_auth_cookie(response)
+    return {"message": "已退出登录"}
 
 
 # 主页路由 - 服务 Vue 3 SPA
-from fastapi.responses import JSONResponse
-
 @app.get("/")
 async def read_root(request: Request):
     """提供 Vue 3 SPA 的主页面"""

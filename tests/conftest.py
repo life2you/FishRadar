@@ -1,8 +1,11 @@
 import json
 import os
+import re
 import sys
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -16,9 +19,42 @@ sys.path.insert(0, str(repo_root))
 
 from src.api import dependencies as deps
 from src.api.routes import tasks
+from src.domain.models.auth import AuthenticatedUser
 from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
 from src.services.task_service import TaskService
 from src.services.task_generation_service import TaskGenerationService
+
+
+DEFAULT_TEST_MYSQL_URL = os.getenv(
+    "TEST_MYSQL_URL",
+    "mysql://root:123456@127.0.0.1:3306/fishradar_pytest?charset=utf8mb4",
+)
+
+
+def build_test_database_url(test_name: str) -> str:
+    parsed = urlparse(DEFAULT_TEST_MYSQL_URL)
+    base_database = parsed.path.lstrip("/") or "fishradar_pytest"
+    suffix = re.sub(r"[^a-z0-9]+", "_", test_name.lower()).strip("_") or "case"
+    suffix = suffix[:32]
+    database_name = f"{base_database}_{suffix}_{uuid.uuid4().hex[:8]}"
+    query = urlencode(dict(parse_qsl(parsed.query, keep_blank_values=True)) or {"charset": "utf8mb4"})
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            f"/{database_name}",
+            "",
+            query,
+            "",
+        )
+    )
+
+
+@pytest.fixture()
+def mysql_test_env(monkeypatch, request):
+    database_url = build_test_database_url(request.node.name)
+    monkeypatch.setenv("APP_DATABASE_URL", database_url)
+    return database_url
 
 
 @pytest.fixture()
@@ -100,13 +136,11 @@ class FakeSchedulerService:
 
 
 @pytest.fixture()
-def api_context(tmp_path):
+def api_context(tmp_path, monkeypatch, mysql_test_env):
     config_file = tmp_path / "config.json"
     config_file.write_text("[]", encoding="utf-8")
-    db_path = tmp_path / "app.sqlite3"
 
     repository = SqliteTaskRepository(
-        db_path=str(db_path),
         legacy_config_file=None,
     )
     task_service = TaskService(repository)
@@ -129,6 +163,19 @@ def api_context(tmp_path):
     def override_get_task_generation_service():
         return task_generation_service
 
+    async def override_require_authenticated_user():
+        return AuthenticatedUser(
+            user_id=1,
+            username="admin",
+            role="admin",
+            tenant_id=1,
+            tenant_name="Platform Admin",
+            tenant_status="active",
+            tenant_ai_enabled=True,
+            tenant_activation_required=False,
+            tenant_activated_at="2026-01-01T00:00:00",
+        )
+
     async def mark_started(task_id: int):
         await task_service.update_task_status(task_id, True)
 
@@ -143,11 +190,13 @@ def api_context(tmp_path):
     app.dependency_overrides[deps.get_process_service] = override_get_process_service
     app.dependency_overrides[deps.get_scheduler_service] = override_get_scheduler_service
     app.dependency_overrides[deps.get_task_generation_service] = override_get_task_generation_service
+    app.dependency_overrides[deps.require_authenticated_user] = override_require_authenticated_user
+    app.dependency_overrides[deps.require_workspace_user] = override_require_authenticated_user
 
     return {
         "app": app,
         "config_file": config_file,
-        "db_path": db_path,
+        "database_url": mysql_test_env,
         "process_service": process_service,
         "scheduler_service": scheduler_service,
         "task_generation_service": task_generation_service,

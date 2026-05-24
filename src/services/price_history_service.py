@@ -16,6 +16,7 @@ from src.infrastructure.persistence.sqlite_connection import sqlite_connection
 
 PRICE_HISTORY_DIR = "price_history"
 DEFAULT_HISTORY_WINDOW_DAYS = 30
+GLOBAL_TENANT_SCOPE = "__global__"
 
 
 def normalize_keyword_slug(keyword: str) -> str:
@@ -60,6 +61,29 @@ def _to_day(iso_text: str) -> str:
     return iso_text[:10]
 
 
+def _append_tenant_filter(conditions: list[str], params: list, tenant_scope) -> None:
+    if tenant_scope is None:
+        return
+    if tenant_scope == GLOBAL_TENANT_SCOPE:
+        conditions.append("tenant_id IS NULL")
+        return
+    conditions.append("tenant_id = ?")
+    params.append(int(tenant_scope))
+
+
+def _tenant_scope_to_db_value(tenant_scope):
+    if tenant_scope in {None, GLOBAL_TENANT_SCOPE}:
+        return None
+    return int(tenant_scope)
+
+
+def _scoped_keyword_slug(keyword: str, tenant_scope) -> str:
+    base_slug = normalize_keyword_slug(keyword)
+    if tenant_scope in {None, GLOBAL_TENANT_SCOPE}:
+        return base_slug
+    return f"tenant_{int(tenant_scope)}__{base_slug}"
+
+
 def _build_snapshot_record(
     *,
     keyword: str,
@@ -101,6 +125,7 @@ def record_market_snapshots(
     run_id: str,
     snapshot_time: Optional[str] = None,
     seen_item_ids: Optional[set[str]] = None,
+    tenant_scope=None,
 ) -> list[dict]:
     snapshot_time = _safe_iso_datetime(snapshot_time)
     seen = seen_item_ids if seen_item_ids is not None else set()
@@ -123,18 +148,19 @@ def record_market_snapshots(
         return []
 
     bootstrap_sqlite_storage()
-    keyword_slug = normalize_keyword_slug(keyword)
+    keyword_slug = _scoped_keyword_slug(keyword, tenant_scope)
     with sqlite_connection() as conn:
         for record in records:
             conn.execute(
                 """
                 INSERT OR IGNORE INTO price_snapshots (
-                    keyword_slug, keyword, task_name, snapshot_time, snapshot_day,
+                    tenant_id, keyword_slug, keyword, task_name, snapshot_time, snapshot_day,
                     run_id, item_id, title, price, price_display, tags_json, region,
                     seller, publish_time, link
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
+                    _tenant_scope_to_db_value(tenant_scope),
                     keyword_slug,
                     record.get("keyword", keyword),
                     record.get("task_name", task_name),
@@ -156,17 +182,26 @@ def record_market_snapshots(
     return records
 
 
-def load_price_snapshots(keyword: str) -> list[dict]:
+def load_price_snapshots(keyword: str, tenant_scope=None) -> list[dict]:
+    return load_price_snapshots_for_scope(keyword, tenant_scope=tenant_scope)
+
+
+def load_price_snapshots_for_scope(keyword: str, tenant_scope=None) -> list[dict]:
     bootstrap_sqlite_storage()
+    conditions = ["keyword_slug = ?"]
+    params: list = [_scoped_keyword_slug(keyword, tenant_scope)]
+    _append_tenant_filter(conditions, params, tenant_scope)
     with sqlite_connection() as conn:
         rows = conn.execute(
             """
             SELECT *
             FROM price_snapshots
-            WHERE keyword_slug = ?
+            WHERE """
+            + " AND ".join(conditions)
+            + """
             ORDER BY snapshot_time ASC, id ASC
             """,
-            (normalize_keyword_slug(keyword),),
+            tuple(params),
         ).fetchall()
     snapshots: list[dict] = []
     for row in rows:
@@ -191,12 +226,15 @@ def load_price_snapshots(keyword: str) -> list[dict]:
     return snapshots
 
 
-def delete_price_snapshots(keyword: str) -> int:
+def delete_price_snapshots(keyword: str, tenant_scope=None) -> int:
     bootstrap_sqlite_storage()
+    conditions = ["keyword_slug = ?"]
+    params: list = [_scoped_keyword_slug(keyword, tenant_scope)]
+    _append_tenant_filter(conditions, params, tenant_scope)
     with sqlite_connection() as conn:
         cursor = conn.execute(
-            "DELETE FROM price_snapshots WHERE keyword_slug = ?",
-            (normalize_keyword_slug(keyword),),
+            f"DELETE FROM price_snapshots WHERE {' AND '.join(conditions)}",
+            tuple(params),
         )
         conn.commit()
     return int(cursor.rowcount or 0)
@@ -366,8 +404,9 @@ def build_price_history_insights(
     *,
     window_days: int = DEFAULT_HISTORY_WINDOW_DAYS,
     visible_item_ids: Optional[set[str]] = None,
+    tenant_scope=None,
 ) -> dict:
-    snapshots = load_price_snapshots(keyword)
+    snapshots = load_price_snapshots_for_scope(keyword, tenant_scope=tenant_scope)
     if visible_item_ids is not None:
         snapshots = [
             snapshot

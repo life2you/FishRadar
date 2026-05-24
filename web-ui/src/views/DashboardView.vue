@@ -11,12 +11,14 @@ import { formatNumber, formatRelativeTimeFromNow } from '@/i18n'
 import {
   Activity,
   ArrowRight,
+  Building2,
   Compass,
   LayoutDashboard,
   Search,
+  Settings2,
   Sparkles,
   Target,
-  Zap,
+  Users,
 } from 'lucide-vue-next'
 
 const router = useRouter()
@@ -105,11 +107,29 @@ const insightCards = computed(() => {
   ]
 })
 
-function goCreateTask() {
-  router.push({
-    name: 'Tasks',
-    query: { create: '1' },
-  })
+const quickActions = computed(() => [
+  {
+    title: t('dashboard.actions.tenantsTitle'),
+    description: t('dashboard.actions.tenantsDescription'),
+    icon: Building2,
+    routeName: 'Tenants',
+  },
+  {
+    title: t('dashboard.actions.accountsTitle'),
+    description: t('dashboard.actions.accountsDescription'),
+    icon: Users,
+    routeName: 'Accounts',
+  },
+  {
+    title: t('dashboard.actions.settingsTitle'),
+    description: t('dashboard.actions.settingsDescription'),
+    icon: Settings2,
+    routeName: 'Settings',
+  },
+])
+
+function openRoute(routeName: string) {
+  router.push({ name: routeName })
 }
 
 function openSuggestion() {
@@ -125,7 +145,7 @@ function openActivity(activity: { filename: string | null; type: string }) {
     return
   }
   if (activity.type === 'task') {
-    router.push({ name: 'Tasks' })
+    router.push({ name: 'Logs' })
     return
   }
   router.push({ name: 'Dashboard' })
@@ -134,22 +154,37 @@ function openActivity(activity: { filename: string | null; type: string }) {
 
 <template>
   <div class="space-y-8 animate-fade-in">
-    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
-      <div>
-        <h1 class="text-3xl font-black text-slate-800 tracking-tight flex items-center gap-3">
-          <LayoutDashboard class="w-8 h-8 text-primary" />
-          {{ t('dashboard.title') }}
-        </h1>
-        <p class="text-slate-500 mt-1 font-medium">
-          {{ t('dashboard.description') }}
-        </p>
+    <section class="overflow-hidden rounded-[32px] border border-slate-200/80 bg-[linear-gradient(135deg,#08111f_0%,#13233a_45%,#deebf7_220%)] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.16)] md:px-8">
+      <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+        <div class="max-w-3xl">
+          <p class="text-xs font-black uppercase tracking-[0.32em] text-slate-300">CatchYu Console</p>
+          <h1 class="mt-3 flex items-center gap-3 text-3xl font-black tracking-tight md:text-4xl">
+            <LayoutDashboard class="h-8 w-8 text-[#9fd3ff]" />
+            {{ t('dashboard.title') }}
+          </h1>
+          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300 md:text-base">
+            {{ t('dashboard.description') }}
+          </p>
+        </div>
+        <div class="rounded-[28px] border border-white/10 bg-white/10 px-5 py-4 backdrop-blur">
+          <p class="text-xs font-black uppercase tracking-[0.28em] text-slate-400">{{ t('dashboard.hero.label') }}</p>
+          <p class="mt-2 max-w-sm text-sm leading-7 text-slate-200">{{ t('dashboard.hero.description') }}</p>
+        </div>
       </div>
-      <div class="flex items-center gap-3">
-        <Button class="shadow-md shadow-primary/20" @click="goCreateTask">
-          {{ t('dashboard.createTask') }}
-        </Button>
+
+      <div class="mt-6 grid gap-3 lg:grid-cols-3">
+        <button
+          v-for="item in quickActions"
+          :key="item.routeName"
+          class="group rounded-[24px] border border-white/10 bg-white/10 p-4 text-left backdrop-blur transition-all hover:-translate-y-0.5 hover:bg-white/14"
+          @click="openRoute(item.routeName)"
+        >
+          <component :is="item.icon" class="h-5 w-5 text-[#a6d0ff]" />
+          <h2 class="mt-4 text-base font-black text-white">{{ item.title }}</h2>
+          <p class="mt-2 text-sm leading-6 text-slate-300">{{ item.description }}</p>
+        </button>
       </div>
-    </div>
+    </section>
     <div v-if="error" class="app-alert-error" role="alert">
       {{ error.message }}
     </div>
@@ -278,7 +313,7 @@ function openActivity(activity: { filename: string | null; type: string }) {
         </Card>
         <div class="app-surface border-none p-6">
           <div class="mb-4 flex items-center gap-2">
-            <Zap class="w-6 h-6 text-primary" />
+            <Sparkles class="w-6 h-6 text-primary" />
             <h4 class="font-bold text-lg">{{ t('dashboard.suggestion.sectionTitle') }}</h4>
           </div>
           <p class="mb-2 text-sm leading-relaxed text-slate-800">{{ suggestion.title }}</p>

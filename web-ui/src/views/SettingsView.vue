@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { BellRing, Bot, ServerCog } from 'lucide-vue-next'
 import { useSettings } from '@/composables/useSettings'
 import type { NotificationSettingsUpdate, NotificationTestResponse } from '@/api/settings'
 import { Button } from '@/components/ui/button'
@@ -44,6 +45,29 @@ const promptContent = ref('')
 const isPromptLoading = ref(false)
 const isPromptSaving = ref(false)
 const promptError = ref<string | null>(null)
+const configuredChannelsCount = computed(() => systemStatus.value?.configured_notification_channels?.length ?? 0)
+const settingsHeroCards = computed(() => [
+  {
+    icon: Bot,
+    label: t('settings.hero.cards.ai'),
+    value: systemStatus.value?.ai_configured ? t('common.enabled') : t('common.disabled'),
+    detail: aiSettings.value.OPENAI_MODEL_NAME || 'OPENAI_MODEL_NAME',
+  },
+  {
+    icon: BellRing,
+    label: t('settings.hero.cards.notifications'),
+    value: configuredChannelsCount.value ? String(configuredChannelsCount.value) : t('common.empty'),
+    detail: configuredChannelsCount.value
+      ? t('settings.hero.notificationsConfigured', { count: configuredChannelsCount.value })
+      : t('settings.hero.notificationsEmpty'),
+  },
+  {
+    icon: ServerCog,
+    label: t('settings.hero.cards.runtime'),
+    value: systemStatus.value?.running_in_docker ? 'Docker' : 'Local',
+    detail: systemStatus.value?.scraper_running ? t('common.running') : t('common.idle'),
+  },
+])
 
 function notifySuccess(title: string, description?: string) {
   toast({ title, description })
@@ -179,8 +203,33 @@ watch(selectedPrompt, async (value) => {
 </script>
 
 <template>
-  <div>
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">{{ t('settings.title') }}</h1>
+  <div class="space-y-6">
+    <section class="overflow-hidden rounded-[32px] border border-slate-200/80 bg-[linear-gradient(135deg,#09101b_0%,#16263c_44%,#dce8f2_220%)] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.18)] md:px-8">
+      <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
+        <div class="max-w-3xl">
+          <p class="text-xs font-black uppercase tracking-[0.32em] text-slate-300">CatchYu Console</p>
+          <h1 class="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">{{ t('settings.title') }}</h1>
+          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300 md:text-base">{{ t('settings.description') }}</p>
+        </div>
+        <div class="rounded-[28px] border border-white/10 bg-white/10 px-5 py-4 backdrop-blur xl:max-w-sm">
+          <p class="text-xs font-black uppercase tracking-[0.24em] text-slate-400">{{ t('settings.hero.panelLabel') }}</p>
+          <p class="mt-2 text-sm leading-7 text-slate-200">{{ t('settings.hero.panelDescription') }}</p>
+        </div>
+      </div>
+
+      <div class="mt-6 grid gap-3 md:grid-cols-3">
+        <article
+          v-for="card in settingsHeroCards"
+          :key="card.label"
+          class="rounded-[24px] border border-white/10 bg-white/10 p-4 backdrop-blur"
+        >
+          <component :is="card.icon" class="h-5 w-5 text-[#a6d0ff]" />
+          <p class="mt-4 text-xs font-black uppercase tracking-[0.22em] text-slate-400">{{ card.label }}</p>
+          <p class="mt-3 text-lg font-black text-white">{{ card.value }}</p>
+          <p class="mt-2 text-sm leading-6 text-slate-300">{{ card.detail }}</p>
+        </article>
+      </div>
+    </section>
     
     <div v-if="error" class="app-alert-error mb-4" role="alert">
       {{ error.message }}

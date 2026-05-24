@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { Button } from '@/components/ui/button'
 import { toast } from '@/components/ui/toast'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -18,8 +19,13 @@ const EMPTY_CRON_VALUE = '__manual__'
 
 const props = defineProps<{
   mode: FormMode
+  variant?: 'default' | 'tenant'
+  submitLabel?: string
+  isSubmitting?: boolean
+  allowAiMode?: boolean
   initialData?: Task | null
   accountOptions?: { name: string; path: string }[]
+  allowFixedAccount?: boolean
   defaultAccount?: string
   defaultValues?: Partial<TaskGenerateRequest & Partial<Task>>
 }>()
@@ -70,11 +76,55 @@ const presetCronValue = computed({
   },
   set: (val: string) => { form.value.cron = val === EMPTY_CRON_VALUE ? '' : val },
 })
-const accountStrategyOptions = computed(() => [
-  { value: 'auto', label: t('tasks.form.accountStrategy.auto'), description: t('tasks.form.accountStrategy.autoDescription') },
-  { value: 'fixed', label: t('tasks.form.accountStrategy.fixed'), description: t('tasks.form.accountStrategy.fixedDescription') },
-  { value: 'rotate', label: t('tasks.form.accountStrategy.rotate'), description: t('tasks.form.accountStrategy.rotateDescription') },
-])
+const accountStrategyOptions = computed(() => {
+  const options = [
+    { value: 'auto', label: t('tasks.form.accountStrategy.auto'), description: t('tasks.form.accountStrategy.autoDescription') },
+    { value: 'fixed', label: t('tasks.form.accountStrategy.fixed'), description: t('tasks.form.accountStrategy.fixedDescription') },
+    { value: 'rotate', label: t('tasks.form.accountStrategy.rotate'), description: t('tasks.form.accountStrategy.rotateDescription') },
+  ]
+  if (props.allowFixedAccount === false) {
+    return options.filter((option) => option.value !== 'fixed')
+  }
+  return options
+})
+const isTenantVariant = computed(() => props.variant === 'tenant')
+const canUseAiMode = computed(() => props.allowAiMode !== false)
+const keywordRuleCount = computed(() => parseKeywordText(keywordRulesInput.value).length)
+const scheduleSummary = computed(() => {
+  const cronValue = String(form.value.cron || '')
+  if (!cronValue) return '手动触发'
+  return cronPresets.value.find((preset) => preset.value === cronValue)?.label || cronValue
+})
+const accountStrategySummary = computed(() => {
+  return accountStrategyOptions.value.find((option) => option.value === accountStrategy.value)?.label || '自动选择'
+})
+const selectedAccountName = computed(() => {
+  return (props.accountOptions || []).find((account) => account.path === selectedAccountStateFile.value)?.name || ''
+})
+const publishSummary = computed(() => {
+  const mapping: Record<string, string> = {
+    最新: t('tasks.form.publishOptions.latest'),
+    '1天内': t('tasks.form.publishOptions.oneDay'),
+    '3天内': t('tasks.form.publishOptions.threeDays'),
+    '7天内': t('tasks.form.publishOptions.sevenDays'),
+    '14天内': t('tasks.form.publishOptions.fourteenDays'),
+  }
+  const value = String(form.value.new_publish_option || '')
+  if (!value || value === '__none__') return t('tasks.form.publishOptions.none')
+  return mapping[value] || value
+})
+const summaryTags = computed(() => {
+  const tags: string[] = []
+  if (form.value.personal_only) tags.push('仅个人卖家')
+  if (form.value.free_shipping) tags.push('包邮优先')
+  if (form.value.region) tags.push(String(form.value.region))
+  if (form.value.min_price || form.value.max_price) {
+    const min = form.value.min_price ? `¥${form.value.min_price}` : '不限'
+    const max = form.value.max_price ? `¥${form.value.max_price}` : '不限'
+    tags.push(`${min} - ${max}`)
+  }
+  return tags.slice(0, 5)
+})
 
 function parseKeywordText(text: string): string[] {
   const values = String(text || '')
@@ -156,9 +206,23 @@ watch(() => [props.mode, props.initialData, props.defaultValues, props.defaultAc
   }
 
   accountStrategy.value = form.value.account_strategy || (props.defaultAccount ? 'fixed' : 'auto')
+  if (props.allowFixedAccount === false && accountStrategy.value === 'fixed') {
+    accountStrategy.value = 'auto'
+    form.value.account_strategy = 'auto'
+    form.value.account_state_file = null
+  }
   selectedAccountStateFile.value =
     form.value.account_state_file || props.defaultAccount || AUTO_ACCOUNT_VALUE
+  if (!canUseAiMode.value && form.value.decision_mode === 'ai') {
+    form.value.decision_mode = 'keyword'
+  }
 }, { immediate: true, deep: true })
+
+watch(canUseAiMode, (enabled) => {
+  if (!enabled && form.value.decision_mode === 'ai') {
+    form.value.decision_mode = 'keyword'
+  }
+}, { immediate: true })
 
 watch(accountStrategy, (value) => {
   form.value.account_strategy = value
@@ -168,6 +232,12 @@ watch(accountStrategy, (value) => {
   }
   form.value.account_state_file = null
 })
+
+watch(() => props.allowFixedAccount, (allowFixedAccount) => {
+  if (allowFixedAccount === false && accountStrategy.value === 'fixed') {
+    accountStrategy.value = 'auto'
+  }
+}, { immediate: true })
 
 watch(selectedAccountStateFile, (value) => {
   if (accountStrategy.value !== 'fixed') return
@@ -194,6 +264,14 @@ function handleSubmit() {
   }
 
   const decisionMode = form.value.decision_mode || 'ai'
+  if (decisionMode === 'ai' && !canUseAiMode.value) {
+    toast({
+      title: 'AI 分析暂未开通',
+      description: '请联系管理员为当前租户开启 AI 分析能力，或切换到关键词模式。',
+      variant: 'destructive',
+    })
+    return
+  }
   if (decisionMode === 'ai' && !String(form.value.description || '').trim()) {
     toast({
       title: t('tasks.form.validation.incomplete'),
@@ -258,7 +336,295 @@ function handleSubmit() {
 </script>
 
 <template>
-  <form id="task-form" @submit.prevent="handleSubmit">
+  <form v-if="isTenantVariant" id="task-form" @submit.prevent="handleSubmit">
+    <div class="space-y-6">
+      <div class="grid gap-3 md:grid-cols-4">
+        <article class="rounded-[22px] border border-[#eadbc8] bg-white/80 px-4 py-3 shadow-sm">
+          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">步骤 1</p>
+          <p class="mt-2 text-sm font-bold text-[#2b1d13]">填写关键词</p>
+          <p class="mt-1 text-xs leading-5 text-[#6f5b47]">先明确任务名和搜索词。</p>
+        </article>
+        <article class="rounded-[22px] border border-[#eadbc8] bg-white/80 px-4 py-3 shadow-sm">
+          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">步骤 2</p>
+          <p class="mt-2 text-sm font-bold text-[#2b1d13]">选择策略</p>
+          <p class="mt-1 text-xs leading-5 text-[#6f5b47]">AI 模式或关键词模式。</p>
+        </article>
+        <article class="rounded-[22px] border border-[#eadbc8] bg-white/80 px-4 py-3 shadow-sm">
+          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">步骤 3</p>
+          <p class="mt-2 text-sm font-bold text-[#2b1d13]">设置频率</p>
+          <p class="mt-1 text-xs leading-5 text-[#6f5b47]">决定手动抓取还是定时抓取。</p>
+        </article>
+        <article class="rounded-[22px] border border-[#eadbc8] bg-white/80 px-4 py-3 shadow-sm">
+          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">步骤 4</p>
+          <p class="mt-2 text-sm font-bold text-[#2b1d13]">确认发布</p>
+          <p class="mt-1 text-xs leading-5 text-[#6f5b47]">检查摘要后即可上线任务。</p>
+        </article>
+      </div>
+
+      <div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+        <div class="space-y-5">
+          <section class="rounded-[28px] border border-[#eadbc8] bg-white/82 p-5 shadow-sm">
+            <div class="mb-4">
+              <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">基础设定</p>
+              <h3 class="mt-2 text-xl font-black tracking-[-0.03em] text-[#241a12]">定义你要抓的目标商品</h3>
+            </div>
+            <div class="grid gap-4 lg:grid-cols-2">
+              <div class="space-y-2">
+                <Label for="task-name" class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.taskName') }}</Label>
+                <Input id="task-name" v-model="form.task_name" class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]" :placeholder="t('tasks.form.taskNamePlaceholder')" required />
+              </div>
+              <div class="space-y-2">
+                <Label for="keyword" class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.keyword') }}</Label>
+                <Input id="keyword" v-model="form.keyword" class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]" :placeholder="t('tasks.form.keywordPlaceholder')" required />
+              </div>
+              <div class="space-y-2 lg:col-span-2">
+                <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.decisionMode') }}</Label>
+                <div class="grid gap-3 md:grid-cols-2">
+                  <button
+                    type="button"
+                    class="rounded-[24px] border p-4 text-left transition-colors"
+                    :class="[
+                      form.decision_mode === 'ai' ? 'border-[#d6e1d8] bg-[#edf6ef]' : 'border-[#eadbc8] bg-[#fffaf2]',
+                      !canUseAiMode ? 'cursor-not-allowed opacity-55' : '',
+                    ]"
+                    :disabled="!canUseAiMode"
+                    @click="canUseAiMode && (form.decision_mode = 'ai')"
+                  >
+                    <p class="text-base font-bold text-[#2b1d13]">{{ t('tasks.form.aiMode') }}</p>
+                    <p class="mt-2 text-sm leading-6 text-[#6f5b47]">
+                      {{ canUseAiMode ? '适合复杂判断，系统会异步生成分析标准。' : '当前租户暂未开通 AI 分析，请联系管理员开通。' }}
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    class="rounded-[24px] border p-4 text-left transition-colors"
+                    :class="form.decision_mode === 'keyword' ? 'border-[#ead3c0] bg-[#fbefe1]' : 'border-[#eadbc8] bg-[#fffaf2]'"
+                    @click="form.decision_mode = 'keyword'"
+                  >
+                    <p class="text-base font-bold text-[#2b1d13]">{{ t('tasks.form.keywordMode') }}</p>
+                    <p class="mt-2 text-sm leading-6 text-[#6f5b47]">适合规则明确的场景，命中关键词即可推荐。</p>
+                  </button>
+                </div>
+                <p v-if="!canUseAiMode" class="text-xs text-[#9a5336]">
+                  当前租户尚未开通 AI 分析能力，创建任务时仅可使用关键词模式。
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-[28px] border border-[#eadbc8] bg-white/82 p-5 shadow-sm">
+            <div class="mb-4">
+              <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">分析策略</p>
+              <h3 class="mt-2 text-xl font-black tracking-[-0.03em] text-[#241a12]">告诉 CatchYu 如何判断线索</h3>
+            </div>
+            <div class="space-y-4">
+              <div class="space-y-2">
+                <Label for="description" class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.description') }}</Label>
+                <Textarea id="description" v-model="form.description" class="min-h-[140px] rounded-[24px] border-[#e1d4c1] bg-[#fffdf8]" :placeholder="t('tasks.form.descriptionPlaceholder')" />
+                <p v-if="form.decision_mode === 'keyword'" class="text-xs text-[#7d6b57]">{{ t('tasks.form.keywordDescriptionHint') }}</p>
+              </div>
+
+              <div v-if="form.decision_mode === 'ai'" class="rounded-[24px] border border-[#d6e1d8] bg-[#f5faf6] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-bold text-[#2b1d13]">{{ t('tasks.form.analyzeImages') }}</p>
+                    <p class="mt-1 text-xs leading-5 text-[#6f5b47]">{{ t('tasks.form.analyzeImagesHint') }}</p>
+                  </div>
+                  <Switch id="analyze-images" v-model="form.analyze_images" />
+                </div>
+              </div>
+
+              <div v-if="form.decision_mode === 'keyword'" class="space-y-2">
+                <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.keywordRules') }}</Label>
+                <p class="text-xs text-[#7d6b57]">{{ t('tasks.form.keywordRulesHint') }}</p>
+                <Textarea v-model="keywordRulesInput" class="min-h-[140px] rounded-[24px] border-[#e1d4c1] bg-[#fffdf8]" :placeholder="t('tasks.form.keywordRulesPlaceholder')" />
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-[28px] border border-[#eadbc8] bg-white/82 p-5 shadow-sm">
+            <div class="mb-4">
+              <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">搜索范围</p>
+              <h3 class="mt-2 text-xl font-black tracking-[-0.03em] text-[#241a12]">限定价格、区域和卖家类型</h3>
+            </div>
+            <div class="grid gap-4 lg:grid-cols-2">
+              <div class="space-y-2">
+                <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.priceRange') }}</Label>
+                <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+                  <Input type="number" v-model="form.min_price as any" class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]" :aria-label="t('tasks.form.minPrice')" :placeholder="t('tasks.form.minPrice')" />
+                  <span class="text-[#8f7b68]">-</span>
+                  <Input type="number" v-model="form.max_price as any" class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]" :aria-label="t('tasks.form.maxPrice')" :placeholder="t('tasks.form.maxPrice')" />
+                </div>
+              </div>
+              <div class="space-y-2">
+                <Label for="max-pages" class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.maxPages') }}</Label>
+                <Input id="max-pages" v-model.number="form.max_pages" type="number" class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]" />
+              </div>
+              <div class="space-y-2 lg:col-span-2">
+                <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.newPublish') }}</Label>
+                <Select v-model="form.new_publish_option as any">
+                  <SelectTrigger class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]">
+                    <SelectValue :placeholder="t('tasks.form.publishOptions.none')" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">{{ t('tasks.form.publishOptions.none') }}</SelectItem>
+                    <SelectItem value="最新">{{ t('tasks.form.publishOptions.latest') }}</SelectItem>
+                    <SelectItem value="1天内">{{ t('tasks.form.publishOptions.oneDay') }}</SelectItem>
+                    <SelectItem value="3天内">{{ t('tasks.form.publishOptions.threeDays') }}</SelectItem>
+                    <SelectItem value="7天内">{{ t('tasks.form.publishOptions.sevenDays') }}</SelectItem>
+                    <SelectItem value="14天内">{{ t('tasks.form.publishOptions.fourteenDays') }}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div class="space-y-2 lg:col-span-2">
+                <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.region') }}</Label>
+                <TaskRegionSelector v-model="form.region as any" />
+                <p class="text-xs text-[#7d6b57]">{{ t('tasks.form.regionHint') }}</p>
+              </div>
+              <div class="rounded-[24px] border border-[#e8ddcf] bg-[#fcf7ef] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-bold text-[#2b1d13]">{{ t('tasks.form.personalOnly') }}</p>
+                    <p class="mt-1 text-xs text-[#6f5b47]">优先只抓个人卖家发布的商品。</p>
+                  </div>
+                  <Switch id="personal-only" v-model="form.personal_only" />
+                </div>
+              </div>
+              <div class="rounded-[24px] border border-[#e8ddcf] bg-[#fcf7ef] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-bold text-[#2b1d13]">{{ t('tasks.form.freeShipping') }}</p>
+                    <p class="mt-1 text-xs text-[#6f5b47]">筛掉不包邮的商品，适合直接比较到手价。</p>
+                  </div>
+                  <Switch id="free-shipping" v-model="form.free_shipping" />
+                </div>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-[28px] border border-[#eadbc8] bg-white/82 p-5 shadow-sm">
+            <div class="mb-4">
+              <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">执行方式</p>
+              <h3 class="mt-2 text-xl font-black tracking-[-0.03em] text-[#241a12]">决定任务如何启动和运行</h3>
+            </div>
+            <div class="space-y-4">
+              <div class="space-y-2">
+                <Label for="cron" class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.schedule') }}</Label>
+                <Tabs v-model="cronMode" class="w-full">
+                  <TabsList class="grid h-12 w-full grid-cols-2 rounded-2xl bg-[#f7efe3]">
+                    <TabsTrigger value="preset">{{ t('tasks.form.cronPresetTab') }}</TabsTrigger>
+                    <TabsTrigger value="custom">{{ t('tasks.form.cronCustomTab') }}</TabsTrigger>
+                  </TabsList>
+                  <TabsContent value="preset" class="mt-3">
+                    <Select v-model="presetCronValue">
+                      <SelectTrigger class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]">
+                        <SelectValue :placeholder="t('tasks.form.cronPlaceholder')" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem v-for="preset in cronPresets" :key="preset.value" :value="preset.value">
+                          {{ preset.label }}
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </TabsContent>
+                  <TabsContent value="custom" class="mt-3">
+                    <Input id="cron" v-model="form.cron" class="h-12 rounded-2xl border-[#e1d4c1] bg-[#fffdf8]" :placeholder="t('tasks.form.cronCustomPlaceholder')" />
+                    <p class="mt-2 text-xs text-[#7d6b57]">{{ t('tasks.form.cronCustomHintLine1') }}</p>
+                    <p class="text-xs text-[#7d6b57]">{{ t('tasks.form.cronCustomHintLine2') }}</p>
+                  </TabsContent>
+                </Tabs>
+              </div>
+
+              <div class="grid gap-4 lg:grid-cols-2">
+                <div class="space-y-2">
+                  <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.accountStrategyLabel') }}</Label>
+                  <select
+                    :value="accountStrategy"
+                    class="flex h-12 w-full rounded-2xl border border-[#e1d4c1] bg-[#fffdf8] px-4 text-sm text-[#2b1d13] focus:outline-none focus:ring-2 focus:ring-[#d8bea2]"
+                    @change="handleAccountStrategyChange"
+                  >
+                    <option v-for="option in accountStrategyOptions" :key="option.value" :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                  <p class="text-xs text-[#7d6b57]">{{ accountStrategyOptions.find((option) => option.value === accountStrategy)?.description }}</p>
+                </div>
+
+                <div v-if="accountStrategy === 'fixed'" class="space-y-2">
+                  <Label class="text-sm font-semibold text-[#4b3727]">{{ t('tasks.form.fixedAccount') }}</Label>
+                  <select
+                    :value="selectedAccountStateFile"
+                    class="flex h-12 w-full rounded-2xl border border-[#e1d4c1] bg-[#fffdf8] px-4 text-sm text-[#2b1d13] focus:outline-none focus:ring-2 focus:ring-[#d8bea2]"
+                    @change="handleAccountStateFileChange"
+                  >
+                    <option :value="AUTO_ACCOUNT_VALUE">{{ t('tasks.form.selectAccount') }}</option>
+                    <option v-for="account in accountOptions || []" :key="account.path" :value="account.path">
+                      {{ account.name }}
+                    </option>
+                  </select>
+                </div>
+              </div>
+
+              <div v-if="mode === 'edit'" class="rounded-[24px] border border-[#e8ddcf] bg-[#fcf7ef] p-4">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <p class="text-sm font-bold text-[#2b1d13]">启用状态</p>
+                    <p class="mt-1 text-xs text-[#6f5b47]">关闭后任务不会参与调度，也不会自动运行。</p>
+                  </div>
+                  <Switch v-model="form.enabled" />
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <aside class="space-y-4">
+          <section class="rounded-[28px] border border-[#e1d2be] bg-[linear-gradient(180deg,#fcf5ea_0%,#f4eadb_100%)] p-5 shadow-sm">
+            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">任务摘要</p>
+            <h3 class="mt-3 text-2xl font-black tracking-[-0.04em] text-[#241a12]">
+              {{ form.task_name || '未命名任务' }}
+            </h3>
+            <div class="mt-4 space-y-3 text-sm leading-6 text-[#5f4d3d]">
+              <p><span class="font-semibold text-[#2b1d13]">关键词：</span>{{ form.keyword || '待填写' }}</p>
+              <p><span class="font-semibold text-[#2b1d13]">模式：</span>{{ form.decision_mode === 'keyword' ? t('tasks.form.keywordMode') : t('tasks.form.aiMode') }}</p>
+              <p><span class="font-semibold text-[#2b1d13]">频率：</span>{{ scheduleSummary }}</p>
+              <p><span class="font-semibold text-[#2b1d13]">账号策略：</span>{{ accountStrategySummary }}<span v-if="selectedAccountName"> / {{ selectedAccountName }}</span></p>
+              <p><span class="font-semibold text-[#2b1d13]">关键词规则：</span>{{ keywordRuleCount }} 条</p>
+              <p><span class="font-semibold text-[#2b1d13]">发布时间：</span>{{ publishSummary }}</p>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-2">
+              <span
+                v-for="tag in summaryTags"
+                :key="tag"
+                class="rounded-full border border-[#e5d8c6] bg-white/90 px-3 py-1 text-xs font-semibold text-[#684e38]"
+              >
+                {{ tag }}
+              </span>
+            </div>
+          </section>
+
+          <section class="rounded-[28px] border border-[#eadbc8] bg-white/88 p-5 shadow-sm">
+            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9b8165]">发布前检查</p>
+            <ul class="mt-3 space-y-3 text-sm leading-6 text-[#5f4d3d]">
+              <li>AI 模式下需要填写详细需求。</li>
+              <li>关键词模式下至少要有一条关键词规则。</li>
+              <li>如果你设置了定时规则，保存后就会参与调度。</li>
+            </ul>
+            <Button
+              v-if="submitLabel"
+              type="submit"
+              class="mt-5 h-12 w-full rounded-full bg-[#21160f] text-white hover:bg-[#2f2016]"
+              :disabled="isSubmitting"
+            >
+              {{ isSubmitting ? t('tasks.createDialog.submitting') : submitLabel }}
+            </Button>
+          </section>
+        </aside>
+      </div>
+    </div>
+  </form>
+
+  <form v-else id="task-form" @submit.prevent="handleSubmit">
     <div class="grid gap-6 py-4">
       <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label for="task-name" class="sm:text-right">{{ t('tasks.form.taskName') }}</Label>
@@ -276,10 +642,13 @@ function handleSubmit() {
               <SelectValue :placeholder="t('tasks.form.decisionModePlaceholder')" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="ai">{{ t('tasks.form.aiMode') }}</SelectItem>
+              <SelectItem v-if="canUseAiMode" value="ai">{{ t('tasks.form.aiMode') }}</SelectItem>
               <SelectItem value="keyword">{{ t('tasks.form.keywordMode') }}</SelectItem>
             </SelectContent>
           </Select>
+          <p v-if="!canUseAiMode" class="mt-2 text-xs text-amber-700">
+            当前租户尚未开通 AI 分析能力，暂时只能使用关键词模式。
+          </p>
         </div>
       </div>
       <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
@@ -304,7 +673,6 @@ function handleSubmit() {
           </p>
         </div>
       </div>
-
       <div v-if="form.decision_mode === 'keyword'" class="grid gap-2 sm:grid-cols-4 sm:gap-4">
         <Label class="pt-1 sm:pt-2 sm:text-right">{{ t('tasks.form.keywordRules') }}</Label>
         <div class="space-y-2 sm:col-span-3">
@@ -318,7 +686,6 @@ function handleSubmit() {
           />
         </div>
       </div>
-
       <div class="grid gap-2 sm:grid-cols-4 sm:items-center sm:gap-4">
         <Label class="sm:text-right">{{ t('tasks.form.priceRange') }}</Label>
         <div class="grid grid-cols-[1fr_auto_1fr] items-center gap-2 sm:col-span-3">

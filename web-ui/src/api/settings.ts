@@ -72,6 +72,59 @@ export interface RotationSettings {
   PROXY_BLACKLIST_TTL?: number
 }
 
+export interface TenantAccessItem {
+  id: number
+  name: string
+  slug: string
+  status: string
+  ai_enabled: boolean
+  activation_required: boolean
+  activated_at: string | null
+  access_expires_at: string | null
+  access_expired: boolean
+  workspace_enabled: boolean
+  can_use_ai: boolean
+  created_at: string
+  member_count: number
+}
+
+export interface TenantAccessDetail {
+  tenant: TenantAccessItem
+  metrics: {
+    task_count: number
+    enabled_task_count: number
+    running_task_count: number
+    result_file_count: number
+    scanned_item_count: number
+    ai_recommended_item_count: number
+    keyword_recommended_item_count: number
+    recommended_item_count: number
+    latest_crawl_time: string | null
+  }
+  latest_activation_code: {
+    code: string
+    status: string
+    duration_minutes: number
+    note: string | null
+    created_at: string
+    redeemed_at: string | null
+  } | null
+}
+
+export interface ActivationCodeItem {
+  id?: number
+  code: string
+  status: string
+  duration_minutes: number
+  note: string | null
+  created_by_user_id: number | null
+  redeemed_by_tenant_id: number | null
+  redeemed_by_user_id: number | null
+  redeemed_at: string | null
+  created_at: string
+  redeemed_tenant_name?: string | null
+}
+
 export interface SystemStatus {
   scraper_running: boolean
   running_task_ids?: number[]
@@ -157,6 +210,46 @@ export async function testAiSettings(settings: AiSettings): Promise<{ success: b
 
 export async function getSystemStatus(): Promise<SystemStatus> {
   return await http('/api/settings/status')
+}
+
+export async function getTenantAccessSettings(): Promise<{ items: TenantAccessItem[] }> {
+  return await http('/api/settings/tenants')
+}
+
+export async function updateTenantAccessSettings(
+  tenantId: number,
+  payload: {
+    status?: string
+    ai_enabled?: boolean
+    activation_required?: boolean
+    extend_access_minutes?: number
+  },
+): Promise<{ message: string; item: TenantAccessItem }> {
+  return await http(`/api/settings/tenants/${tenantId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getTenantAccessDetail(tenantId: number): Promise<TenantAccessDetail> {
+  return await http(`/api/settings/tenants/${tenantId}`)
+}
+
+export async function getActivationCodes(): Promise<{ items: ActivationCodeItem[] }> {
+  return await http('/api/settings/activation-codes')
+}
+
+export async function createActivationCodes(payload: {
+  quantity: number
+  duration_minutes: number
+  note?: string | null
+}): Promise<{ message: string; items: ActivationCodeItem[] }> {
+  return await http('/api/settings/activation-codes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
 }
 
 export async function updateLoginState(content: string): Promise<{ message: string }> {

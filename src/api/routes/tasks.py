@@ -1,17 +1,22 @@
 """
 任务管理路由
 """
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import JSONResponse
-from typing import List
-import os
 import aiofiles
+import os
+from typing import List
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
+
 from src.api.dependencies import (
+    require_authenticated_user,
+    require_workspace_user,
     get_process_service,
     get_scheduler_service,
     get_task_generation_service,
     get_task_service,
 )
+from src.domain.models.auth import AuthenticatedUser
 from src.services.task_service import TaskService
 from src.services.process_service import ProcessService
 from src.services.scheduler_service import SchedulerService
@@ -27,6 +32,7 @@ from src.utils import resolve_task_log_path
 from src.services.account_strategy_service import normalize_account_strategy
 from src.infrastructure.persistence.storage_names import build_result_filename
 from src.services.price_history_service import delete_price_snapshots
+from src.services.result_storage_service import GLOBAL_TENANT_SCOPE
 from src.services.result_storage_service import delete_result_file_records
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -55,32 +61,72 @@ def _validate_final_account_strategy(existing_task, task_update: TaskUpdate) -> 
     task_update.account_strategy = account_strategy
     if account_strategy == "fixed" and not account_state_file:
         raise HTTPException(status_code=400, detail="固定账号模式下必须选择账号。")
+
+
+def _is_task_accessible(task, current_user: AuthenticatedUser) -> bool:
+    if current_user.role == "admin":
+        return True
+    return (
+        current_user.tenant_id is not None
+        and task.tenant_id == current_user.tenant_id
+    )
+
+
+def _require_task_access(task, current_user: AuthenticatedUser) -> None:
+    if not _is_task_accessible(task, current_user):
+        raise HTTPException(status_code=404, detail="任务未找到")
+
+
+def _filter_tasks_for_user(tasks: list, current_user: AuthenticatedUser) -> list:
+    if current_user.role == "admin":
+        return tasks
+    return [task for task in tasks if _is_task_accessible(task, current_user)]
+
+
+def _ensure_can_use_ai(current_user: AuthenticatedUser) -> None:
+    if current_user.role == "tenant" and not current_user.can_use_ai:
+        raise HTTPException(status_code=403, detail="当前租户未开通 AI 分析能力")
+
+
 @router.get("", response_model=List[dict])
 async def get_tasks(
+    tenant_id: int | None = Query(default=None),
     service: TaskService = Depends(get_task_service),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """获取所有任务"""
-    tasks = await service.get_all_tasks()
+    tasks = _filter_tasks_for_user(await service.get_all_tasks(), current_user)
+    if tenant_id is not None:
+        if current_user.role != "admin":
+            raise HTTPException(status_code=403, detail="当前账号无权按租户筛选任务")
+        tasks = [task for task in tasks if task.tenant_id == tenant_id]
     return serialize_tasks(tasks, scheduler_service)
 @router.get("/{task_id}", response_model=dict)
 async def get_task(
     task_id: int,
     service: TaskService = Depends(get_task_service),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """获取单个任务"""
     task = await service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
+    _require_task_access(task, current_user)
     return serialize_task(task, scheduler_service)
 @router.post("/", response_model=dict)
 async def create_task(
     task_create: TaskCreate,
     service: TaskService = Depends(get_task_service),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """创建新任务"""
+    if task_create.decision_mode == "ai":
+        _ensure_can_use_ai(current_user)
+    if current_user.role == "tenant":
+        task_create = task_create.model_copy(update={"tenant_id": current_user.tenant_id})
     task = await service.create_task(task_create)
     await _reload_scheduler_if_needed(service, scheduler_service)
     return {"message": "任务创建成功", "task": serialize_task(task, scheduler_service)}
@@ -90,13 +136,17 @@ async def generate_task(
     service: TaskService = Depends(get_task_service),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
     generation_service: TaskGenerationService = Depends(get_task_generation_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """创建任务。AI模式会生成分析标准，关键词模式直接保存规则。"""
     print(f"收到任务生成请求: {req.task_name}，模式: {req.decision_mode}")
+    if current_user.role == "tenant":
+        req = req.model_copy(update={"tenant_id": current_user.tenant_id})
 
     try:
         mode = req.decision_mode or "ai"
         if mode == "ai":
+            _ensure_can_use_ai(current_user)
             job = await generation_service.create_job(req.task_name)
             generation_service.track(
                 run_ai_generation_job(
@@ -131,6 +181,7 @@ async def generate_task(
 async def get_task_generation_job(
     job_id: str,
     generation_service: TaskGenerationService = Depends(get_task_generation_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """获取任务生成作业状态"""
     job = await generation_service.get_job(job_id)
@@ -143,16 +194,22 @@ async def update_task(
     task_update: TaskUpdate,
     service: TaskService = Depends(get_task_service),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """更新任务"""
     try:
         existing_task = await service.get_task(task_id)
         if not existing_task:
             raise HTTPException(status_code=404, detail="任务未找到")
+        _require_task_access(existing_task, current_user)
+        if current_user.role == "tenant":
+            task_update.tenant_id = existing_task.tenant_id
+        target_mode = task_update.decision_mode or getattr(existing_task, "decision_mode", "ai") or "ai"
+        if target_mode == "ai":
+            _ensure_can_use_ai(current_user)
         _validate_final_account_strategy(existing_task, task_update)
 
         current_mode = getattr(existing_task, "decision_mode", "ai") or "ai"
-        target_mode = task_update.decision_mode or current_mode
         description_changed = (
             task_update.description is not None
             and task_update.description != existing_task.description
@@ -217,11 +274,13 @@ async def delete_task(
     service: TaskService = Depends(get_task_service),
     process_service: ProcessService = Depends(get_process_service),
     scheduler_service: SchedulerService = Depends(get_scheduler_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """删除任务"""
     task = await service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
+    _require_task_access(task, current_user)
 
     await process_service.stop_task(task_id)
     success = await service.delete_task(task_id)
@@ -232,13 +291,28 @@ async def delete_task(
         keyword = (task.keyword or "").strip()
         if keyword:
             remaining_tasks = await service.get_all_tasks()
+            if task.tenant_id is None:
+                remaining_tasks = [
+                    remaining_task for remaining_task in remaining_tasks
+                    if remaining_task.tenant_id is None
+                ]
+                tenant_scope = GLOBAL_TENANT_SCOPE
+            else:
+                remaining_tasks = [
+                    remaining_task for remaining_task in remaining_tasks
+                    if remaining_task.tenant_id == task.tenant_id
+                ]
+                tenant_scope = task.tenant_id
             keyword_still_in_use = any(
                 (remaining_task.keyword or "").strip() == keyword
                 for remaining_task in remaining_tasks
             )
             if not keyword_still_in_use:
-                await delete_result_file_records(build_result_filename(keyword))
-                delete_price_snapshots(keyword)
+                await delete_result_file_records(
+                    build_result_filename(keyword),
+                    tenant_scope=tenant_scope,
+                )
+                delete_price_snapshots(keyword, tenant_scope=tenant_scope)
     except Exception as e:
         print(f"删除任务结果文件时出错: {e}")
 
@@ -254,11 +328,13 @@ async def start_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
     process_service: ProcessService = Depends(get_process_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """启动单个任务"""
     task = await task_service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
+    _require_task_access(task, current_user)
     if not task.enabled:
         raise HTTPException(status_code=400, detail="任务已被禁用，无法启动")
     if task.is_running:
@@ -272,10 +348,12 @@ async def stop_task(
     task_id: int,
     task_service: TaskService = Depends(get_task_service),
     process_service: ProcessService = Depends(get_process_service),
+    current_user: AuthenticatedUser = Depends(require_workspace_user),
 ):
     """停止单个任务"""
     task = await task_service.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="任务未找到")
+    _require_task_access(task, current_user)
     await process_service.stop_task(task_id)
     return {"message": f"任务ID {task_id} 已发送停止信号"}

@@ -2,13 +2,17 @@
 FastAPI 依赖注入
 提供服务实例的创建和管理
 """
-from fastapi import Depends
+from typing import Annotated
+
+from fastapi import Cookie, Depends, HTTPException, status
+from src.domain.models.auth import AuthenticatedUser
 from src.services.task_service import TaskService
 from src.services.notification_service import NotificationService, build_notification_service
 from src.services.ai_service import AIAnalysisService
 from src.services.process_service import ProcessService
 from src.services.scheduler_service import SchedulerService
 from src.services.task_generation_service import TaskGenerationService
+from src.services.auth_service import AUTH_SESSION_COOKIE, get_user_by_session
 from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
 from src.infrastructure.external.ai_client import AIClient
 
@@ -74,3 +78,48 @@ def get_task_generation_service() -> TaskGenerationService:
     if _task_generation_service_instance is None:
         raise RuntimeError("TaskGenerationService 未初始化")
     return _task_generation_service_instance
+
+
+async def get_current_user(
+    session_token: Annotated[str | None, Cookie(alias=AUTH_SESSION_COOKIE)] = None,
+) -> AuthenticatedUser | None:
+    """获取当前会话用户。"""
+    if not session_token:
+        return None
+    return await get_user_by_session(session_token)
+
+
+async def require_authenticated_user(
+    current_user: AuthenticatedUser | None = Depends(get_current_user),
+) -> AuthenticatedUser:
+    """要求当前请求已登录。"""
+    if current_user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="未登录或登录已过期",
+        )
+    return current_user
+
+
+async def require_admin_user(
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> AuthenticatedUser:
+    """要求当前用户为管理员。"""
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="当前账号无权访问该资源",
+        )
+    return current_user
+
+
+async def require_workspace_user(
+    current_user: AuthenticatedUser = Depends(require_authenticated_user),
+) -> AuthenticatedUser:
+    """要求当前用户已具备租户工作台访问权限。"""
+    if current_user.role == "tenant" and not current_user.workspace_enabled:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="租户工作台尚未开通或已过期，请先使用卡密激活",
+        )
+    return current_user

@@ -5,7 +5,7 @@
 from src.infrastructure.persistence.storage_names import normalize_keyword_from_filename
 from src.services.price_history_service import (
     build_item_price_context,
-    load_price_snapshots,
+    load_price_snapshots_for_scope,
     parse_price_value,
 )
 from src.services.result_storage_service import load_visible_result_item_ids
@@ -16,12 +16,20 @@ def validate_result_filename(filename: str) -> None:
         raise ValueError("无效的文件名")
 
 
-def enrich_records_with_price_insight(records: list[dict], filename: str) -> list[dict]:
-    snapshots = load_price_snapshots(normalize_keyword_from_filename(filename))
+def enrich_records_with_price_insight(
+    records: list[dict],
+    filename: str,
+    *,
+    tenant_scope=None,
+) -> list[dict]:
+    snapshots = load_price_snapshots_for_scope(
+        normalize_keyword_from_filename(filename),
+        tenant_scope=tenant_scope,
+    )
     if not snapshots:
         return records
 
-    visible_item_ids = load_visible_result_item_ids(filename)
+    visible_item_ids = load_visible_result_item_ids(filename, tenant_scope=tenant_scope)
     visible_snapshots = [
         snapshot
         for snapshot in snapshots

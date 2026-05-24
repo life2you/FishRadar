@@ -7,8 +7,10 @@ import type {
 } from '@/types/task.d.ts'
 import { http } from '@/lib/http'
 
-export async function getAllTasks(): Promise<Task[]> {
-  return await http('/api/tasks')
+export async function getAllTasks(tenantId?: number | null): Promise<Task[]> {
+  return await http('/api/tasks', {
+    params: tenantId ? { tenant_id: tenantId } : undefined,
+  })
 }
 
 export async function createTaskWithAI(data: TaskGenerateRequest): Promise<TaskCreateResponse> {

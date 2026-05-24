@@ -1,5 +1,5 @@
 """
-SQLite 启动初始化与旧文件迁移。
+MySQL 启动初始化与旧文件迁移。
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from src.infrastructure.persistence.storage_names import (
     normalize_keyword_from_filename,
     normalize_keyword_slug,
 )
+from src.services.auth_service import bootstrap_default_auth_data
 
 
 BOOTSTRAP_LOCK = threading.Lock()
@@ -32,12 +33,15 @@ def bootstrap_sqlite_storage(
     legacy_result_dir: str = LEGACY_RESULT_DIR,
     legacy_price_history_dir: str = LEGACY_PRICE_HISTORY_DIR,
 ) -> None:
+    if db_path is not None:
+        raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
     with BOOTSTRAP_LOCK:
-        with sqlite_connection(db_path) as conn:
+        with sqlite_connection() as conn:
             init_schema(conn)
             _import_tasks_if_needed(conn, legacy_config_file)
             _import_results_if_needed(conn, legacy_result_dir)
             _import_price_snapshots_if_needed(conn, legacy_price_history_dir)
+        bootstrap_default_auth_data()
 
 
 def _table_is_empty(conn, table_name: str) -> bool:
