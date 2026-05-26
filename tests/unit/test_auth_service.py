@@ -1,8 +1,8 @@
 from datetime import datetime, timedelta
 import asyncio
 
-from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
-from src.infrastructure.persistence.sqlite_connection import sqlite_connection
+from src.infrastructure.persistence.mysql_bootstrap import bootstrap_mysql_storage
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 from src.services.result_storage_service import save_result_record
 from src.services.auth_service import (
     authenticate_credentials_sync,
@@ -17,7 +17,7 @@ from src.services.auth_service import (
 def test_tenant_registration_requires_activation_before_workspace_access(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
 
-    bootstrap_sqlite_storage(
+    bootstrap_mysql_storage(
         legacy_config_file=None,
         legacy_result_dir=str(tmp_path / "jsonl"),
         legacy_price_history_dir=str(tmp_path / "price_history"),
@@ -43,7 +43,7 @@ def test_tenant_registration_requires_activation_before_workspace_access(tmp_pat
     activated = redeem_activation_code_sync(codes[0]["code"], registered)
     assert activated.workspace_enabled is True
     assert activated.can_use_ai is False
-    assert activated.allowed_routes == ["tasks", "results"]
+    assert activated.allowed_routes == ["tasks", "results", "notifications"]
     assert activated.tenant_access_expires_at is not None
     assert datetime.fromisoformat(activated.tenant_access_expires_at) > datetime.now()
 
@@ -57,7 +57,7 @@ def test_tenant_registration_requires_activation_before_workspace_access(tmp_pat
     assert refreshed.can_use_ai is True
 
     expired_at = (datetime.now() - timedelta(minutes=5)).isoformat()
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         conn.execute(
             "UPDATE tenants SET access_expires_at = ? WHERE id = ?",
             (expired_at, tenant_id),
@@ -84,7 +84,7 @@ def test_tenant_registration_requires_activation_before_workspace_access(tmp_pat
 def test_extend_tenant_access_and_detail_metrics(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
 
-    bootstrap_sqlite_storage(
+    bootstrap_mysql_storage(
         legacy_config_file=None,
         legacy_result_dir=str(tmp_path / "jsonl"),
         legacy_price_history_dir=str(tmp_path / "price_history"),
@@ -111,7 +111,7 @@ def test_extend_tenant_access_and_detail_metrics(tmp_path, monkeypatch, mysql_te
     assert updated["access_expires_at"] is not None
     assert datetime.fromisoformat(updated["access_expires_at"]) > original_expiry
 
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         conn.execute(
             """
             INSERT INTO tasks (

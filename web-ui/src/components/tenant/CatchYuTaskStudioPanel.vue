@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
-import { Compass, Sparkles, WandSparkles } from 'lucide-vue-next'
+import { Sparkles } from 'lucide-vue-next'
 import { createTaskWithAI } from '@/api/tasks'
 import { useTaskGenerationJob } from '@/composables/useTaskGenerationJob'
 import { useAuth } from '@/composables/useAuth'
@@ -118,7 +118,7 @@ watch(pollingError, (value) => {
         </div>
         <h2 class="mt-4 text-3xl font-black tracking-[-0.04em] text-[#241a12]">创建新的抓鱼任务</h2>
         <p class="mt-3 max-w-3xl text-sm leading-7 text-[#685542]">
-          这里不是后台表单，而是 CatchYu 的任务工作区。你可以先定目标，再选模式、频率和筛选策略，最后直接发布。
+          在 CatchYu 里先定目标，再选模式、频率和筛选策略，最后直接发布任务。
         </p>
       </div>
       <Button
@@ -131,33 +131,6 @@ watch(pollingError, (value) => {
     </div>
 
     <div class="mt-6 space-y-5">
-      <div class="grid gap-4 md:grid-cols-2">
-        <article class="rounded-[26px] border border-white/85 bg-white/82 p-4 shadow-sm">
-          <div class="flex items-start gap-3">
-            <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#f1dfc2] text-[#9b5e25]">
-              <WandSparkles class="h-5 w-5" />
-            </div>
-            <div>
-              <p class="text-base font-bold text-[#2b1d13]">AI 模式</p>
-              <p class="mt-1 text-sm leading-6 text-[#6f5b47]">
-                {{ canUseAi ? '填写详细需求后，系统会异步生成分析标准并创建任务。' : '当前租户暂未开通 AI 分析，管理员开通后这里会自动恢复。' }}
-              </p>
-            </div>
-          </div>
-        </article>
-        <article class="rounded-[26px] border border-white/85 bg-white/82 p-4 shadow-sm">
-          <div class="flex items-start gap-3">
-            <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[#d9e7dc] text-[#35624b]">
-              <Compass class="h-5 w-5" />
-            </div>
-            <div>
-              <p class="text-base font-bold text-[#2b1d13]">关键词模式</p>
-              <p class="mt-1 text-sm leading-6 text-[#6f5b47]">如果规则已经很清晰，可以直接用关键词命中推荐，创建后即可运行。</p>
-            </div>
-          </div>
-        </article>
-      </div>
-
       <div v-if="activeJob" class="rounded-[28px] border border-[#d6e1d8] bg-[#edf6ef] p-5">
         <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
           <div>

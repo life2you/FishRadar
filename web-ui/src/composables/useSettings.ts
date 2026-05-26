@@ -1,16 +1,17 @@
 import { ref, onMounted } from 'vue'
 import * as settingsApi from '@/api/settings'
 import type {
-  NotificationSettings,
-  NotificationSettingsUpdate,
-  NotificationTestResponse,
+  AiAccountItem,
+  AiAccountPayload,
   AiSettings,
   RotationSettings,
-  SystemStatus
+  SystemStatus,
+  TenantNotificationChannel,
 } from '@/api/settings'
 
 export function useSettings() {
-  const notificationSettings = ref<NotificationSettings>({})
+  const tenantNotificationChannels = ref<TenantNotificationChannel[]>([])
+  const aiAccounts = ref<AiAccountItem[]>([])
   const aiSettings = ref<AiSettings>({})
   const rotationSettings = ref<RotationSettings>({})
   const systemStatus = ref<SystemStatus | null>(null)
@@ -24,14 +25,16 @@ export function useSettings() {
     isLoading.value = true
     error.value = null
     try {
-      const [notif, ai, rotation, status] = await Promise.all([
-        settingsApi.getNotificationSettings(),
+      const [tenantChannels, aiAccountResponse, aiConfig, rotation, status] = await Promise.all([
+        settingsApi.getTenantNotificationChannels(),
+        settingsApi.getAiAccounts(),
         settingsApi.getAiSettings(),
         settingsApi.getRotationSettings(),
         settingsApi.getSystemStatus()
       ])
-      notificationSettings.value = notif
-      aiSettings.value = ai
+      tenantNotificationChannels.value = tenantChannels.channels
+      aiAccounts.value = aiAccountResponse.items
+      aiSettings.value = aiConfig
       rotationSettings.value = rotation
       systemStatus.value = status
     } catch (e) {
@@ -55,31 +58,15 @@ export function useSettings() {
     }
   }
 
-  async function saveNotificationSettings(payload: NotificationSettingsUpdate) {
+  async function saveTenantNotificationChannels(channels: TenantNotificationChannel[]) {
     isSaving.value = true
     try {
-      await settingsApi.updateNotificationSettings(payload)
-      const [notif, status] = await Promise.all([
-        settingsApi.getNotificationSettings(),
+      const [channelSettings, status] = await Promise.all([
+        settingsApi.updateTenantNotificationChannels(channels),
         settingsApi.getSystemStatus()
       ])
-      notificationSettings.value = notif
+      tenantNotificationChannels.value = channelSettings.channels
       systemStatus.value = status
-    } catch (e) {
-      if (e instanceof Error) error.value = e
-      throw e
-    } finally {
-      isSaving.value = false
-    }
-  }
-
-  async function testNotification(payload: {
-    channel?: string
-    settings: NotificationSettingsUpdate
-  }): Promise<NotificationTestResponse> {
-    isSaving.value = true
-    try {
-      return await settingsApi.testNotificationSettings(payload)
     } catch (e) {
       if (e instanceof Error) error.value = e
       throw e
@@ -104,6 +91,83 @@ export function useSettings() {
       }
       // Refresh status
       systemStatus.value = await settingsApi.getSystemStatus()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function refreshAiAccounts() {
+    aiAccounts.value = (await settingsApi.getAiAccounts()).items
+  }
+
+  async function createAiAccount(payload: AiAccountPayload) {
+    isSaving.value = true
+    try {
+      await settingsApi.createAiAccount(payload)
+      await refreshAiAccounts()
+      systemStatus.value = await settingsApi.getSystemStatus()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function updateAiAccount(accountId: number, payload: Partial<AiAccountPayload>) {
+    isSaving.value = true
+    try {
+      await settingsApi.updateAiAccount(accountId, payload)
+      await refreshAiAccounts()
+      systemStatus.value = await settingsApi.getSystemStatus()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function deleteAiAccount(accountId: number) {
+    isSaving.value = true
+    try {
+      await settingsApi.deleteAiAccount(accountId)
+      await refreshAiAccounts()
+      systemStatus.value = await settingsApi.getSystemStatus()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function testAiAccount(payload: {
+    api_key?: string | null
+    base_url: string
+    model_name: string
+  }) {
+    isSaving.value = true
+    try {
+      return await settingsApi.testAiAccount(payload)
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function testExistingAiAccount(accountId: number) {
+    isSaving.value = true
+    try {
+      const result = await settingsApi.testExistingAiAccount(accountId)
+      await refreshAiAccounts()
+      systemStatus.value = await settingsApi.getSystemStatus()
+      return result
     } catch (e) {
       if (e instanceof Error) error.value = e
       throw e
@@ -147,7 +211,8 @@ export function useSettings() {
   onMounted(fetchAll)
 
   return {
-    notificationSettings,
+    tenantNotificationChannels,
+    aiAccounts,
     aiSettings,
     rotationSettings,
     systemStatus,
@@ -156,9 +221,13 @@ export function useSettings() {
     isReady,
     error,
     fetchAll,
-    saveNotificationSettings,
-    testNotification,
+    saveTenantNotificationChannels,
     saveAiSettings,
+    createAiAccount,
+    updateAiAccount,
+    deleteAiAccount,
+    testAiAccount,
+    testExistingAiAccount,
     saveRotationSettings,
     testAiConnection,
     refreshStatus,

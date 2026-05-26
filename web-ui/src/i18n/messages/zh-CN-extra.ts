@@ -8,8 +8,8 @@ const zhCNExtra = {
     nav: {
       tasks: '任务工作台',
       results: '结果情报台',
+      notifications: '通知中心',
     },
-    note: '你看到的任务、结果与筛选规则都只属于当前租户，不会与管理员后台混用。',
     tasks: {
       title: '{tenant} 的抓鱼工作台',
       description: '在 CatchYu 里管理你的监控任务、抓取频率和筛选策略，把日常追踪商品这件事收拢到一个网页工作台里。',
@@ -72,7 +72,7 @@ const zhCNExtra = {
       title: '任务生成进度',
       description: 'AI 正在生成分析标准并创建任务。',
       helperFailed: '生成失败后会保留这个弹窗，方便你查看错误原因。',
-      helperRunning: '任务已转入后台生成，你可以停留在这里查看步骤，也可以先关闭弹窗。',
+      helperRunning: '任务已开始生成，你可以停留在这里查看步骤，也可以先关闭弹窗。',
       closeWindow: '关闭窗口',
       status: { completed: '已完成', failed: '失败', running: '生成中', queued: '排队中' },
     },
@@ -229,9 +229,9 @@ const zhCNExtra = {
     },
     list: {
       title: '账号池列表',
-      description: '账号文件保存在 state/ 目录下，可被管理员分配到任务。',
+      description: '登录态由系统集中托管，可被管理员分配到任务。',
       name: '账号名称',
-      file: '状态文件',
+      file: '登录态标识',
       actions: '操作',
       empty: '暂无账号',
       createTask: '创建任务',
@@ -267,6 +267,7 @@ const zhCNExtra = {
     title: '通知推送设置',
     description: '按渠道单独配置、测试和清空。敏感字段不会回显，留空表示保留现有值。',
     noActiveChannels: '尚未配置可用通知渠道',
+    noAvailableChannels: '当前账号暂时没有可用的通知渠道。',
     enabledChannels: '已启用：{channels}',
     supportedVariables: '支持变量：title / content / price / reason / desktop_link / mobile_link',
     globalBehavior: '全局行为',

@@ -8,8 +8,8 @@ import hashlib
 import json
 from datetime import datetime
 
-from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
-from src.infrastructure.persistence.sqlite_connection import sqlite_connection
+from src.infrastructure.persistence.mysql_bootstrap import bootstrap_mysql_storage
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 from src.infrastructure.persistence.storage_names import build_result_filename
 from src.services.price_history_service import parse_price_value
 from src.services.result_blacklist_service import (
@@ -196,7 +196,7 @@ async def save_result_record(record: dict, keyword: str, tenant_scope=None) -> b
 
 
 def _save_result_record_sync(record: dict, keyword: str, tenant_scope=None) -> bool:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     item = record.get("商品信息", {}) or {}
     analysis = record.get("ai_analysis", {}) or {}
     link = str(item.get("商品链接") or "")
@@ -207,7 +207,7 @@ def _save_result_record_sync(record: dict, keyword: str, tenant_scope=None) -> b
     except (TypeError, ValueError):
         keyword_hit_count = 0
 
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         conn.execute(
             """
             INSERT OR IGNORE INTO result_items (
@@ -241,12 +241,12 @@ def _save_result_record_sync(record: dict, keyword: str, tenant_scope=None) -> b
 
 
 def load_processed_link_keys(keyword: str, tenant_scope=None) -> set[str]:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     filename = _scoped_result_filename(build_result_filename(keyword), tenant_scope)
     conditions = ["result_filename = ?"]
     params: list = [filename]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         rows = conn.execute(
             f"SELECT link_unique_key FROM result_items WHERE {' AND '.join(conditions)}",
             tuple(params),
@@ -259,14 +259,14 @@ async def list_result_filenames(tenant_scope=None) -> list[str]:
 
 
 def _list_result_filenames_sync(tenant_scope=None) -> list[str]:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     where_clause = ""
     params: list = []
     if tenant_scope is not None:
         conditions: list[str] = []
         _append_tenant_filter(conditions, params, tenant_scope)
         where_clause = f"WHERE {' AND '.join(conditions)}"
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         rows = conn.execute(
             """
             SELECT result_filename, MAX(crawl_time) AS latest_crawl_time
@@ -290,11 +290,11 @@ async def result_file_exists(filename: str, tenant_scope=None) -> bool:
 
 
 def _result_file_exists_sync(filename: str, tenant_scope=None) -> bool:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     conditions = ["result_filename = ?"]
     params: list = [_scoped_result_filename(filename, tenant_scope)]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         row = conn.execute(
             f"SELECT 1 FROM result_items WHERE {' AND '.join(conditions)} LIMIT 1",
             tuple(params),
@@ -307,11 +307,11 @@ async def delete_result_file_records(filename: str, tenant_scope=None) -> int:
 
 
 def _delete_result_file_records_sync(filename: str, tenant_scope=None) -> int:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     conditions = ["result_filename = ?"]
     params: list = [_scoped_result_filename(filename, tenant_scope)]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         cursor = conn.execute(
             f"DELETE FROM result_items WHERE {' AND '.join(conditions)}",
             tuple(params),
@@ -357,9 +357,9 @@ def _query_result_records_sync(
     include_hidden: bool,
     tenant_scope=None,
 ) -> tuple[int, list[dict]]:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     offset = max(page - 1, 0) * limit
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         records = _load_filtered_records_from_conn(
             conn,
             filename=filename,
@@ -405,8 +405,8 @@ def _load_all_result_records_sync(
     include_hidden: bool,
     tenant_scope=None,
 ) -> list[dict]:
-    bootstrap_sqlite_storage()
-    with sqlite_connection() as conn:
+    bootstrap_mysql_storage()
+    with mysql_connection() as conn:
         return _load_filtered_records_from_conn(
             conn,
             filename=filename,
@@ -424,11 +424,11 @@ async def build_result_ndjson(filename: str, tenant_scope=None) -> str:
 
 
 def _build_result_ndjson_sync(filename: str, tenant_scope=None) -> str:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     conditions = ["result_filename = ?"]
     params: list = [_scoped_result_filename(filename, tenant_scope)]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         rows = conn.execute(
             f"SELECT raw_json FROM result_items WHERE {' AND '.join(conditions)} ORDER BY id ASC",
             tuple(params),
@@ -441,8 +441,8 @@ async def load_result_summary(filename: str, tenant_scope=None) -> dict | None:
 
 
 def _load_result_summary_sync(filename: str, tenant_scope=None) -> dict | None:
-    bootstrap_sqlite_storage()
-    with sqlite_connection() as conn:
+    bootstrap_mysql_storage()
+    with mysql_connection() as conn:
         visible_records = _load_filtered_records_from_conn(
             conn,
             filename=filename,
@@ -489,14 +489,77 @@ async def update_item_status(filename: str, item_id: str, status: str, tenant_sc
 
 
 def _update_item_status_sync(filename: str, item_id: str, status: str, tenant_scope=None) -> bool:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     conditions = ["result_filename = ?", "item_id = ?"]
     params: list = [_scoped_result_filename(filename, tenant_scope), item_id]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         cursor = conn.execute(
             f"UPDATE result_items SET status = ? WHERE {' AND '.join(conditions)}",
             (status, *params),
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+
+
+async def update_result_analysis(
+    filename: str,
+    item_id: str,
+    ai_analysis: dict,
+    tenant_scope=None,
+) -> bool:
+    return await asyncio.to_thread(
+        _update_result_analysis_sync,
+        filename,
+        item_id,
+        ai_analysis,
+        tenant_scope,
+    )
+
+
+def _update_result_analysis_sync(
+    filename: str,
+    item_id: str,
+    ai_analysis: dict,
+    tenant_scope=None,
+) -> bool:
+    bootstrap_mysql_storage()
+    conditions = ["result_filename = ?", "item_id = ?"]
+    params: list = [_scoped_result_filename(filename, tenant_scope), item_id]
+    _append_tenant_filter(conditions, params, tenant_scope)
+
+    with mysql_connection() as conn:
+        row = conn.execute(
+            f"SELECT raw_json FROM result_items WHERE {' AND '.join(conditions)} LIMIT 1",
+            tuple(params),
+        ).fetchone()
+        if row is None:
+            return False
+
+        record = _parse_raw_record(str(row["raw_json"]))
+        record["ai_analysis"] = ai_analysis
+        keyword_hit_count = ai_analysis.get("keyword_hit_count", 0)
+        try:
+            keyword_hit_count = int(keyword_hit_count)
+        except (TypeError, ValueError):
+            keyword_hit_count = 0
+
+        cursor = conn.execute(
+            f"""
+            UPDATE result_items
+            SET is_recommended = ?,
+                analysis_source = ?,
+                keyword_hit_count = ?,
+                raw_json = ?
+            WHERE {' AND '.join(conditions)}
+            """,
+            (
+                1 if ai_analysis.get("is_recommended") else 0,
+                ai_analysis.get("analysis_source"),
+                keyword_hit_count,
+                json.dumps(record, ensure_ascii=False),
+                *params,
+            ),
         )
         conn.commit()
         return cursor.rowcount > 0
@@ -507,8 +570,8 @@ async def load_result_blacklist_keywords(filename: str, tenant_scope=None) -> li
 
 
 def _load_result_blacklist_keywords_sync(filename: str, tenant_scope=None) -> list[str]:
-    bootstrap_sqlite_storage()
-    with sqlite_connection() as conn:
+    bootstrap_mysql_storage()
+    with mysql_connection() as conn:
         return _load_blacklist_keywords_from_conn(conn, filename, tenant_scope)
 
 
@@ -517,10 +580,10 @@ async def save_result_blacklist_keywords(filename: str, keywords: list[str], ten
 
 
 def _save_result_blacklist_keywords_sync(filename: str, keywords: list[str], tenant_scope=None) -> list[str]:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     normalized_keywords = normalize_blacklist_keywords(keywords)
     now = datetime.now().isoformat()
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         scope_filename = _blacklist_scope_key(filename, tenant_scope)
         payload = (
             scope_filename,
@@ -556,8 +619,8 @@ def _save_result_blacklist_keywords_sync(filename: str, keywords: list[str], ten
 
 
 def load_visible_result_item_ids(filename: str, tenant_scope=None) -> set[str]:
-    bootstrap_sqlite_storage()
-    with sqlite_connection() as conn:
+    bootstrap_mysql_storage()
+    with mysql_connection() as conn:
         visible_records = _load_filtered_records_from_conn(
             conn,
             filename=filename,

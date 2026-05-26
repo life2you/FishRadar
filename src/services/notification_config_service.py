@@ -87,6 +87,37 @@ def model_dump(model, *, exclude_unset: bool = False) -> dict:
     return model.dict(exclude_unset=exclude_unset)
 
 
+def build_notification_settings_from_values(values: dict) -> NotificationSettings:
+    return _build_notification_settings_model(values)
+
+
+def notification_settings_to_values(settings: NotificationSettings) -> dict:
+    return _notification_settings_to_values(settings)
+
+
+def normalize_notification_channels(channels: list[str] | tuple[str, ...] | set[str]) -> list[str]:
+    return [channel for channel in channels if channel in CHANNEL_NOTIFICATION_FIELDS]
+
+
+def allowed_notification_fields(channels: list[str] | tuple[str, ...] | set[str]) -> set[str]:
+    fields: set[str] = {"PCURL_TO_MOBILE"}
+    for channel in normalize_notification_channels(channels):
+        fields.update(CHANNEL_NOTIFICATION_FIELDS[channel])
+    return fields
+
+
+def assert_notification_patch_allowed(patch_payload: dict, channels: list[str] | tuple[str, ...] | set[str]) -> None:
+    allowed_fields = allowed_notification_fields(channels)
+    invalid_fields = sorted(
+        field for field in patch_payload
+        if field in NOTIFICATION_FIELD_MAP and field not in allowed_fields
+    )
+    if invalid_fields:
+        raise NotificationSettingsValidationError(
+            "以下通知字段未向租户开放: " + ", ".join(invalid_fields)
+        )
+
+
 def build_notification_settings_response(
     settings: NotificationSettings | None = None,
 ) -> dict:

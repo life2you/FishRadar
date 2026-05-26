@@ -11,8 +11,8 @@ from datetime import datetime
 from statistics import median
 from typing import Any, Iterable, Optional
 
-from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
-from src.infrastructure.persistence.sqlite_connection import sqlite_connection
+from src.infrastructure.persistence.mysql_bootstrap import bootstrap_mysql_storage
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 
 PRICE_HISTORY_DIR = "price_history"
 DEFAULT_HISTORY_WINDOW_DAYS = 30
@@ -147,9 +147,9 @@ def record_market_snapshots(
     if not records:
         return []
 
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     keyword_slug = _scoped_keyword_slug(keyword, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         for record in records:
             conn.execute(
                 """
@@ -187,11 +187,11 @@ def load_price_snapshots(keyword: str, tenant_scope=None) -> list[dict]:
 
 
 def load_price_snapshots_for_scope(keyword: str, tenant_scope=None) -> list[dict]:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     conditions = ["keyword_slug = ?"]
     params: list = [_scoped_keyword_slug(keyword, tenant_scope)]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         rows = conn.execute(
             """
             SELECT *
@@ -227,11 +227,11 @@ def load_price_snapshots_for_scope(keyword: str, tenant_scope=None) -> list[dict
 
 
 def delete_price_snapshots(keyword: str, tenant_scope=None) -> int:
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     conditions = ["keyword_slug = ?"]
     params: list = [_scoped_keyword_slug(keyword, tenant_scope)]
     _append_tenant_filter(conditions, params, tenant_scope)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         cursor = conn.execute(
             f"DELETE FROM price_snapshots WHERE {' AND '.join(conditions)}",
             tuple(params),

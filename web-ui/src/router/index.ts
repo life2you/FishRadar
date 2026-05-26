@@ -59,6 +59,12 @@ const routes = [
         meta: { titleKey: 'routes.results', requiresAuth: true },
       },
       {
+        path: 'notifications',
+        name: 'Notifications',
+        component: () => import('@/views/TenantNotificationsView.vue'),
+        meta: { titleKey: 'routes.notifications', requiresAuth: true, allowedRoles: ['tenant'] },
+      },
+      {
         path: 'logs',
         name: 'Logs',
         component: () => import('@/views/LogsView.vue'),

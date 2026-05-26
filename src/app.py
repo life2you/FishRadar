@@ -15,6 +15,7 @@ from src.api.routes import (
     tasks,
     logs,
     settings,
+    tenant_settings,
     prompts,
     results,
     login_state,
@@ -43,8 +44,8 @@ from src.services.auth_service import (
     redeem_activation_code,
     register_tenant_user,
 )
-from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
-from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
+from src.infrastructure.persistence.mysql_bootstrap import bootstrap_mysql_storage
+from src.infrastructure.persistence.mysql_task_repository import MySQLTaskRepository
 from src.infrastructure.config.settings import settings as app_settings
 
 
@@ -55,7 +56,7 @@ task_generation_service = TaskGenerationService()
 
 
 async def _sync_task_runtime_status(task_id: int, is_running: bool) -> None:
-    task_service = TaskService(SqliteTaskRepository())
+    task_service = TaskService(MySQLTaskRepository())
     task = await task_service.get_task(task_id)
     if not task or task.is_running == is_running:
         return
@@ -83,11 +84,11 @@ async def lifespan(app: FastAPI):
     """应用生命周期管理"""
     # 启动时
     print("正在启动应用...")
-    bootstrap_sqlite_storage()
+    bootstrap_mysql_storage()
     cleanup_task_logs(keep_days=app_settings.task_log_retention_days)
 
     # 重置所有任务状态为停止
-    task_repo = SqliteTaskRepository()
+    task_repo = MySQLTaskRepository()
     task_service = TaskService(task_repo)
     tasks_list = await task_service.get_all_tasks()
 
@@ -132,6 +133,7 @@ app.include_router(
     settings.router,
     dependencies=[Depends(require_admin_user)],
 )
+app.include_router(tenant_settings.router)
 app.include_router(
     prompts.router,
     dependencies=[Depends(require_admin_user)],

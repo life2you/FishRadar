@@ -7,9 +7,11 @@ from urllib.parse import quote
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import Response
 
-from src.api.dependencies import require_workspace_user
+from src.api.dependencies import get_ai_service, get_task_service, require_admin_user, require_workspace_user
 from src.domain.models.auth import AuthenticatedUser
+from src.services.ai_service import AIAnalysisService
 from src.services.price_history_service import build_price_history_insights
+from src.services.result_reanalysis_service import reanalyze_result_file
 from src.services.result_export_service import build_results_csv
 from src.services.result_file_service import (
     enrich_records_with_price_insight,
@@ -28,6 +30,7 @@ from src.services.result_storage_service import (
     save_result_blacklist_keywords,
     update_item_status,
 )
+from src.services.task_service import TaskService
 
 
 router = APIRouter(prefix="/api/results", tags=["results"])
@@ -308,3 +311,28 @@ async def put_result_blacklist_rules(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
     return {"message": "黑名单规则已更新", "keywords": keywords}
+
+
+@router.post("/{filename}/reanalyze")
+async def post_reanalyze_result_file(
+    filename: str,
+    tenant_id: int | None = Query(default=None),
+    task_service: TaskService = Depends(get_task_service),
+    ai_service: AIAnalysisService = Depends(get_ai_service),
+    current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    try:
+        validate_result_filename(filename)
+        payload = await reanalyze_result_file(
+            filename=filename,
+            tenant_scope=_resolve_results_scope(current_user, tenant_id),
+            task_service=task_service,
+            ai_service=ai_service,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    return {
+        "message": "结果集已完成重新分析",
+        **payload,
+    }

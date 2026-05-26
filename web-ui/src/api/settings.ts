@@ -23,6 +23,7 @@ export interface NotificationSettings {
   WEBHOOK_URL_SET?: boolean
   WEBHOOK_HEADERS_SET?: boolean
   CONFIGURED_CHANNELS?: string[]
+  AVAILABLE_CHANNELS?: string[]
 }
 
 export interface NotificationSettingsUpdate {
@@ -52,6 +53,14 @@ export interface NotificationTestResponse {
   }>
 }
 
+export type TenantNotificationChannel =
+  | 'ntfy'
+  | 'bark'
+  | 'gotify'
+  | 'wecom'
+  | 'telegram'
+  | 'webhook'
+
 export interface AiSettings {
   OPENAI_API_KEY?: string
   OPENAI_BASE_URL?: string
@@ -59,12 +68,43 @@ export interface AiSettings {
   PROXY_URL?: string
 }
 
+export interface AiAccountItem {
+  id: number
+  name: string
+  api_key?: string
+  api_key_set: boolean
+  base_url: string
+  model_name: string
+  supports_image: boolean
+  supports_text: boolean
+  enabled: boolean
+  priority: number
+  notes?: string | null
+  created_at?: string | null
+  updated_at?: string | null
+  last_test_status?: 'success' | 'failed' | null
+  last_test_message?: string | null
+  last_tested_at?: string | null
+  is_fallback?: boolean
+}
+
+export interface AiAccountPayload {
+  name: string
+  api_key?: string | null
+  base_url: string
+  model_name: string
+  supports_image: boolean
+  supports_text: boolean
+  enabled: boolean
+  priority: number
+  notes?: string | null
+}
+
 export interface RotationSettings {
   ACCOUNT_ROTATION_ENABLED?: boolean
   ACCOUNT_ROTATION_MODE?: string
   ACCOUNT_ROTATION_RETRY_LIMIT?: number
   ACCOUNT_BLACKLIST_TTL?: number
-  ACCOUNT_STATE_DIR?: string
   PROXY_ROTATION_ENABLED?: boolean
   PROXY_ROTATION_MODE?: string
   PROXY_POOL?: string
@@ -176,6 +216,44 @@ export async function testNotificationSettings(
   })
 }
 
+export async function getTenantNotificationSettings(): Promise<NotificationSettings> {
+  return await http('/api/tenant-settings/notifications')
+}
+
+export async function updateTenantNotificationSettings(
+  settings: NotificationSettingsUpdate,
+): Promise<{ message: string; configured_channels: string[] }> {
+  return await http('/api/tenant-settings/notifications', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  })
+}
+
+export async function testTenantNotificationSettings(
+  payload: { channel?: string; settings: NotificationSettingsUpdate },
+): Promise<NotificationTestResponse> {
+  return await http('/api/tenant-settings/notifications/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function getTenantNotificationChannels(): Promise<{ channels: TenantNotificationChannel[] }> {
+  return await http('/api/settings/tenant-notification-channels')
+}
+
+export async function updateTenantNotificationChannels(
+  channels: TenantNotificationChannel[],
+): Promise<{ message: string; channels: TenantNotificationChannel[] }> {
+  return await http('/api/settings/tenant-notification-channels', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ channels }),
+  })
+}
+
 export async function getAiSettings(): Promise<AiSettings> {
   return await http('/api/settings/ai')
 }
@@ -205,6 +283,53 @@ export async function testAiSettings(settings: AiSettings): Promise<{ success: b
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(settings)
+  })
+}
+
+export async function getAiAccounts(): Promise<{ items: AiAccountItem[] }> {
+  return await http('/api/settings/ai-accounts')
+}
+
+export async function createAiAccount(payload: AiAccountPayload): Promise<{ message: string; item: AiAccountItem }> {
+  return await http('/api/settings/ai-accounts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateAiAccount(
+  accountId: number,
+  payload: Partial<AiAccountPayload>,
+): Promise<{ message: string; item: AiAccountItem }> {
+  return await http(`/api/settings/ai-accounts/${accountId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteAiAccount(accountId: number): Promise<{ message: string }> {
+  return await http(`/api/settings/ai-accounts/${accountId}`, {
+    method: 'DELETE',
+  })
+}
+
+export async function testAiAccount(payload: {
+  api_key?: string | null
+  base_url: string
+  model_name: string
+}): Promise<{ success: boolean; message: string; response?: string }> {
+  return await http('/api/settings/ai-accounts/test', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function testExistingAiAccount(accountId: number): Promise<{ success: boolean; message: string; response?: string; item?: AiAccountItem | null }> {
+  return await http(`/api/settings/ai-accounts/${accountId}/test`, {
+    method: 'POST',
   })
 }
 

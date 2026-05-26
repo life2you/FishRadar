@@ -145,33 +145,36 @@ onMounted(fetchAccounts)
 
 <template>
   <div class="space-y-6">
-    <section class="overflow-hidden rounded-[32px] border border-slate-200/80 bg-[linear-gradient(135deg,#09121f_0%,#18324d_44%,#d8e4ef_220%)] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.18)] md:px-8">
-      <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-        <div class="max-w-3xl">
-          <p class="text-xs font-black uppercase tracking-[0.32em] text-slate-300">CatchYu Console</p>
-          <h1 class="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">{{ t('accounts.title') }}</h1>
-          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300 md:text-base">{{ t('accounts.description') }}</p>
+    <section class="rounded-[20px] border border-[#d7e2db] bg-[linear-gradient(135deg,#f7fbf7_0%,#eef5f0_100%)] px-4 py-4 text-[#243329] shadow-[0_10px_24px_rgba(78,99,88,0.06)]">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="max-w-[42rem]">
+          <p class="text-[10px] font-black uppercase tracking-[0.24em] text-[#74887c]">CatchYu Console</p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-3">
+            <h1 class="text-[1.45rem] font-black tracking-tight text-[#243329]">{{ t('accounts.title') }}</h1>
+            <span class="rounded-full border border-[#d7e2db] bg-white/90 px-2.5 py-1 text-[11px] font-medium text-[#5d7064]">
+              {{ t('accounts.hero.panelLabel') }}
+            </span>
+          </div>
+          <p class="mt-1 text-[13px] leading-5 text-[#627267]">{{ t('accounts.description') }}</p>
         </div>
-        <div class="rounded-[28px] border border-white/10 bg-white/10 px-5 py-4 backdrop-blur xl:max-w-sm">
-          <p class="text-xs font-black uppercase tracking-[0.24em] text-slate-400">{{ t('accounts.hero.panelLabel') }}</p>
-          <p class="mt-2 text-sm leading-7 text-slate-200">{{ t('accounts.hero.panelDescription') }}</p>
-          <Button class="mt-4 w-full justify-center bg-white text-slate-900 hover:bg-slate-100 sm:w-auto" @click="openCreateDialog">
-            <KeyRound class="mr-2 h-4 w-4" />
-            {{ t('accounts.add') }}
-          </Button>
-        </div>
+        <Button class="h-9 rounded-full bg-[#2b5b47] px-4 text-[13px] font-semibold text-white hover:bg-[#244d3d]" @click="openCreateDialog">
+          <KeyRound class="mr-2 h-4 w-4" />
+          {{ t('accounts.add') }}
+        </Button>
       </div>
 
-      <div class="mt-6 grid gap-3 md:grid-cols-3">
+      <div class="mt-3 flex flex-wrap gap-2">
         <article
           v-for="card in heroCards"
           :key="card.label"
-          class="rounded-[24px] border border-white/10 bg-white/10 p-4 backdrop-blur"
+          class="flex min-w-[220px] flex-1 items-start gap-3 rounded-[14px] border border-[#d7e2db] bg-white/94 px-3 py-2.5 shadow-sm"
         >
-          <component :is="card.icon" class="h-5 w-5 text-[#a6d0ff]" />
-          <p class="mt-4 text-xs font-black uppercase tracking-[0.22em] text-slate-400">{{ card.label }}</p>
-          <p class="mt-3 text-lg font-black text-white">{{ card.value }}</p>
-          <p class="mt-2 text-sm leading-6 text-slate-300">{{ card.detail }}</p>
+          <component :is="card.icon" class="mt-0.5 h-4.5 w-4.5 shrink-0 text-[#74a08a]" />
+          <div class="min-w-0">
+            <p class="text-[10px] font-black uppercase tracking-[0.18em] text-[#88a094]">{{ card.label }}</p>
+            <p class="mt-0.5 text-[14px] font-black text-[#243329]">{{ card.value }}</p>
+            <p class="mt-0.5 text-[12px] leading-5 text-[#66766b]">{{ card.detail }}</p>
+          </div>
         </article>
       </div>
     </section>

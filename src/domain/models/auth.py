@@ -128,4 +128,5 @@ class AuthenticatedUser(BaseModel):
         return [
             "tasks",
             "results",
+            "notifications",
         ]

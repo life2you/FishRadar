@@ -96,10 +96,11 @@ async function handleRegister() {
 </script>
 
 <template>
-  <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-[#f6efe5] px-4 py-10">
+  <div class="relative flex min-h-screen items-center justify-center overflow-hidden bg-[linear-gradient(180deg,#fbf8f1_0%,#f2f6ef_44%,#eef5f3_100%)] px-4 py-8">
     <div aria-hidden="true" class="absolute inset-0">
-      <div class="absolute left-[-8%] top-[-10%] h-80 w-80 rounded-full bg-[#d9c1a0]/30 blur-3xl"></div>
-      <div class="absolute bottom-[-12%] right-[-4%] h-96 w-96 rounded-full bg-[#e9d8be]/40 blur-3xl"></div>
+      <div class="absolute left-[-8%] top-[-10%] h-80 w-80 rounded-full bg-[#cfe0bf]/30 blur-3xl"></div>
+      <div class="absolute bottom-[-12%] right-[-4%] h-96 w-96 rounded-full bg-[#c5dce4]/34 blur-3xl"></div>
+      <div class="absolute bottom-[4%] left-[24%] h-72 w-72 rounded-full bg-[#ecd9b7]/28 blur-3xl"></div>
       <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.65),transparent_42%)]"></div>
     </div>
 
@@ -107,44 +108,44 @@ async function handleRegister() {
       <LocaleToggle />
     </div>
 
-    <div class="relative z-10 grid w-full max-w-6xl gap-6 lg:grid-cols-[1.05fr_0.95fr]">
-      <section class="rounded-[36px] border border-white/70 bg-[linear-gradient(135deg,rgba(255,251,245,0.92)_0%,rgba(247,234,215,0.92)_100%)] p-8 shadow-[0_28px_90px_rgba(82,60,35,0.10)] lg:p-10">
-        <p class="text-[11px] font-bold uppercase tracking-[0.3em] text-[#9f7d58]">{{ t('login.brandEyebrow') }}</p>
-        <h1 class="mt-5 text-4xl font-black tracking-[-0.05em] text-[#251b12] lg:text-5xl">{{ t('login.heroTitle') }}</h1>
-        <p class="mt-5 max-w-2xl text-sm leading-7 text-[#65503f]">
+    <div class="relative z-10 grid w-full max-w-6xl gap-5 lg:grid-cols-[1.02fr_0.98fr]">
+      <section class="rounded-[30px] border border-white/70 bg-[linear-gradient(145deg,rgba(255,255,252,0.92)_0%,rgba(244,248,241,0.94)_48%,rgba(239,247,244,0.94)_100%)] p-6 shadow-[0_22px_70px_rgba(76,97,82,0.08)] lg:p-8">
+        <p class="text-[11px] font-bold uppercase tracking-[0.3em] text-[#7f9278]">{{ t('login.brandEyebrow') }}</p>
+        <h1 class="mt-4 text-3xl font-black tracking-[-0.05em] text-[#203126] lg:text-[2.9rem]">{{ t('login.heroTitle') }}</h1>
+        <p class="mt-4 max-w-2xl text-sm leading-6 text-[#5e6e62]">
           {{ t('login.heroDescription') }}
         </p>
 
-        <div class="mt-8 grid gap-4 md:grid-cols-3">
-          <article class="rounded-[24px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9a7a57]">{{ t('login.cards.register') }}</p>
-            <p class="mt-3 text-base font-bold text-[#2b1d13]">{{ t('login.cards.registerTitle') }}</p>
-            <p class="mt-2 text-sm leading-6 text-[#6c5948]">{{ t('login.cards.registerDescription') }}</p>
+        <div class="mt-6 grid gap-3 md:grid-cols-3">
+          <article class="rounded-[20px] border border-white/80 bg-white/78 p-3.5 shadow-sm">
+            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#7f9278]">{{ t('login.cards.register') }}</p>
+            <p class="mt-2.5 text-base font-bold text-[#223127]">{{ t('login.cards.registerTitle') }}</p>
+            <p class="mt-1.5 text-sm leading-5 text-[#637166]">{{ t('login.cards.registerDescription') }}</p>
           </article>
-          <article class="rounded-[24px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9a7a57]">{{ t('login.cards.activate') }}</p>
-            <p class="mt-3 text-base font-bold text-[#2b1d13]">{{ t('login.cards.activateTitle') }}</p>
-            <p class="mt-2 text-sm leading-6 text-[#6c5948]">{{ t('login.cards.activateDescription') }}</p>
+          <article class="rounded-[20px] border border-white/80 bg-white/78 p-3.5 shadow-sm">
+            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#7f9278]">{{ t('login.cards.activate') }}</p>
+            <p class="mt-2.5 text-base font-bold text-[#223127]">{{ t('login.cards.activateTitle') }}</p>
+            <p class="mt-1.5 text-sm leading-5 text-[#637166]">{{ t('login.cards.activateDescription') }}</p>
           </article>
-          <article class="rounded-[24px] border border-white/80 bg-white/80 p-4 shadow-sm">
-            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9a7a57]">{{ t('login.cards.workspace') }}</p>
-            <p class="mt-3 text-base font-bold text-[#2b1d13]">{{ t('login.cards.workspaceTitle') }}</p>
-            <p class="mt-2 text-sm leading-6 text-[#6c5948]">{{ t('login.cards.workspaceDescription') }}</p>
+          <article class="rounded-[20px] border border-white/80 bg-white/78 p-3.5 shadow-sm">
+            <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#7f9278]">{{ t('login.cards.workspace') }}</p>
+            <p class="mt-2.5 text-base font-bold text-[#223127]">{{ t('login.cards.workspaceTitle') }}</p>
+            <p class="mt-1.5 text-sm leading-5 text-[#637166]">{{ t('login.cards.workspaceDescription') }}</p>
           </article>
         </div>
       </section>
 
-      <Card class="border-none bg-white/88 shadow-[0_26px_90px_rgba(82,60,35,0.12)]">
+      <Card class="border-none bg-white/88 shadow-[0_22px_70px_rgba(76,97,82,0.10)]">
         <CardHeader>
-          <CardTitle class="text-2xl text-center text-[#241a12]">{{ loginCardTitle }}</CardTitle>
-          <CardDescription class="text-center text-[#6a5744]">
+          <CardTitle class="text-2xl text-center text-[#213126]">{{ loginCardTitle }}</CardTitle>
+          <CardDescription class="text-center text-[#647166]">
             {{ activeTab === 'login' ? t('login.description') : t('login.registerDescription') }}
           </CardDescription>
         </CardHeader>
 
         <CardContent class="space-y-4">
           <Tabs v-model="activeTab" class="w-full">
-            <TabsList class="grid h-12 w-full grid-cols-2 rounded-full bg-[#f4eadb] p-1">
+            <TabsList class="grid h-11 w-full grid-cols-2 rounded-full bg-[#edf3eb] p-1">
               <TabsTrigger value="login">{{ t('login.tabs.login') }}</TabsTrigger>
               <TabsTrigger value="register">{{ t('login.tabs.register') }}</TabsTrigger>
             </TabsList>
@@ -159,7 +160,7 @@ async function handleRegister() {
                   <Label for="password">{{ t('login.password') }}</Label>
                   <Input id="password" v-model="loginPassword" type="password" required />
                 </div>
-                <Button class="h-11 w-full rounded-full bg-[#21160f] text-white hover:bg-[#2f2016]" type="submit" :disabled="isLoading">
+                <Button class="h-11 w-full rounded-full bg-[#2b5b47] text-white hover:bg-[#244d3d]" type="submit" :disabled="isLoading">
                   {{ isLoading ? t('login.submitting') : t('login.submit') }}
                 </Button>
               </form>
@@ -187,7 +188,7 @@ async function handleRegister() {
                   <Label for="register-password-confirm">{{ t('login.passwordConfirm') }}</Label>
                   <Input id="register-password-confirm" v-model="registerPasswordConfirm" type="password" required />
                 </div>
-                <Button class="h-11 w-full rounded-full bg-[#21160f] text-white hover:bg-[#2f2016]" type="submit" :disabled="isLoading">
+                <Button class="h-11 w-full rounded-full bg-[#2b5b47] text-white hover:bg-[#244d3d]" type="submit" :disabled="isLoading">
                   {{ isLoading ? t('login.registerSubmitting') : t('login.registerSubmit') }}
                 </Button>
               </form>
@@ -199,7 +200,7 @@ async function handleRegister() {
           </div>
         </CardContent>
 
-        <CardFooter class="justify-center text-center text-xs leading-6 text-[#7b6651]">
+        <CardFooter class="justify-center text-center text-xs leading-6 text-[#6d786f]">
           {{ activeTab === 'login' ? t('login.footer') : t('login.registerFooter') }}
         </CardFooter>
       </Card>

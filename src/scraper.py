@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import sys
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlencode
@@ -12,20 +13,10 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from src.ai_handler import (
+from src.infrastructure.config.settings import ai_settings, scraper_settings
+from src.services.image_runtime_service import (
     download_all_images,
-    get_ai_analysis,
-    send_ntfy_notification,
     cleanup_task_images,
-)
-from src.config import (
-    AI_DEBUG_MODE,
-    DETAIL_API_URL_PATTERN,
-    LOGIN_IS_EDGE,
-    RUN_HEADLESS,
-    RUNNING_IN_DOCKER,
-    SKIP_AI_ANALYSIS,
-    STATE_FILE,
 )
 from src.parsers import (
     _parse_search_results_json,
@@ -56,11 +47,14 @@ from src.services.price_history_service import (
     record_market_snapshots,
 )
 from src.services.result_storage_service import load_processed_link_keys
+from src.services.ai_service import AIAnalysisService
+from src.services.notification_service import send_product_notification
 from src.services.seller_profile_cache import SellerProfileCache
 from src.services.search_pagination import (
     advance_search_page,
     is_search_results_response,
 )
+from src.services.task_prompt_service import resolve_runtime_ai_prompt
 
 
 class RiskControlError(Exception):
@@ -73,6 +67,14 @@ class LoginRequiredError(Exception):
 
 FAILURE_GUARD = FailureGuard()
 EDGE_DOCKER_WARNING_PRINTED = False
+DETAIL_API_URL_PATTERN = "h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _is_login_url(url: str) -> bool:
@@ -84,15 +86,17 @@ def _is_login_url(url: str) -> bool:
 
 def _resolve_browser_channel() -> str:
     global EDGE_DOCKER_WARNING_PRINTED
-    if RUNNING_IN_DOCKER:
-        if LOGIN_IS_EDGE and not EDGE_DOCKER_WARNING_PRINTED:
+    running_in_docker = _env_bool("RUNNING_IN_DOCKER", scraper_settings.running_in_docker)
+    login_is_edge = _env_bool("LOGIN_IS_EDGE", scraper_settings.login_is_edge)
+    if running_in_docker:
+        if login_is_edge and not EDGE_DOCKER_WARNING_PRINTED:
             print(
                 "检测到 LOGIN_IS_EDGE=true，但 Docker 镜像未内置 Edge，"
                 "任务运行时将改用 Chromium。"
             )
             EDGE_DOCKER_WARNING_PRINTED = True
         return "chromium"
-    return "msedge" if LOGIN_IS_EDGE else "chrome"
+    return "msedge" if login_is_edge else "chrome"
 
 
 def _should_analyze_images(task_config: dict) -> bool:
@@ -159,7 +163,11 @@ async def _notify_task_failure(
     )
 
     try:
-        await send_ntfy_notification(product_data, notify_reason)
+        await send_product_notification(
+            product_data,
+            notify_reason,
+            task_config.get("tenant_id"),
+        )
     except Exception as e:
         print(f"发送任务异常通知失败: {e}")
 
@@ -452,7 +460,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     personal_only = task_config.get("personal_only", False)
     min_price = task_config.get("min_price")
     max_price = task_config.get("max_price")
-    ai_prompt_text = task_config.get("ai_prompt_text", "")
+    ai_prompt_text = resolve_runtime_ai_prompt(task_config)
     analyze_images = _should_analyze_images(task_config)
     decision_mode = str(task_config.get("decision_mode", "ai")).strip().lower()
     if decision_mode not in {"ai", "keyword"}:
@@ -487,12 +495,12 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     runtime_plan = resolve_account_runtime_plan(
         strategy=task_config.get("account_strategy"),
         account_state_file=task_config.get("account_state_file"),
-        has_root_state_file=os.path.exists(STATE_FILE),
+        has_root_state_file=os.path.exists(scraper_settings.state_file),
         available_account_files=account_items,
     )
     forced_account = runtime_plan["forced_account"]
     if runtime_plan["prefer_root_state"]:
-        account_items = [STATE_FILE]
+        account_items = [scraper_settings.state_file]
         rotation_settings["account_enabled"] = False
     elif runtime_plan["use_account_pool"]:
         rotation_settings["account_enabled"] = True
@@ -516,8 +524,8 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         if forced_account:
             return RotationItem(value=forced_account)
         if not rotation_settings["account_enabled"]:
-            if os.path.exists(STATE_FILE):
-                return RotationItem(value=STATE_FILE)
+            if os.path.exists(scraper_settings.state_file):
+                return RotationItem(value=scraper_settings.state_file)
             return None
         if (
             rotation_settings["account_mode"] == "per_task"
@@ -566,7 +574,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 "--disable-features=IsolateOrigins,site-per-process",
             ]
 
-            launch_kwargs = {"headless": RUN_HEADLESS, "args": launch_args}
+            launch_kwargs = {"headless": scraper_settings.run_headless, "args": launch_args}
             if proxy_server:
                 launch_kwargs["proxy"] = {"server": proxy_server}
 
@@ -600,16 +608,17 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             seller_profile_cache = SellerProfileCache(
                 ttl_seconds=_get_seller_profile_cache_ttl(task_config)
             )
+            ai_analysis_service = AIAnalysisService()
             analysis_dispatcher = ItemAnalysisDispatcher(
                 concurrency=_get_ai_analysis_concurrency(task_config),
-                skip_ai_analysis=SKIP_AI_ANALYSIS,
+                skip_ai_analysis=ai_settings.skip_analysis,
                 seller_loader=lambda user_id: seller_profile_cache.get_or_load(
                     str(user_id),
                     lambda seller_key: scrape_user_profile(context, seller_key),
                 ),
                 image_downloader=download_all_images,
-                ai_analyzer=get_ai_analysis,
-                notifier=send_ntfy_notification,
+                ai_analyzer=ai_analysis_service.analyze_product,
+                notifier=send_product_notification,
                 saver=lambda record, task_keyword: save_to_jsonl(
                     record,
                     task_keyword,
@@ -1108,6 +1117,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                         seller_id=str(user_id) if user_id else None,
                                         zhima_credit_text=zhima_credit_text,
                                         registration_duration_text=registration_duration_text,
+                                        tenant_id=task_config.get("tenant_id"),
                                     )
                                 )
 
@@ -1126,7 +1136,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                 print(
                                     f"   错误: 获取商品详情API响应失败，状态码: {detail_response.status}"
                                 )
-                                if AI_DEBUG_MODE:
+                                if ai_settings.debug_mode:
                                     print(
                                         f"--- [DETAIL DEBUG] FAILED RESPONSE from {item_data['商品链接']} ---"
                                     )
@@ -1180,7 +1190,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                     await analysis_dispatcher.join()
                 log_time("任务执行完毕，浏览器将在5秒后自动关闭...")
                 await asyncio.sleep(5)
-                if debug_limit:
+                if debug_limit and sys.stdin and sys.stdin.isatty():
                     input("按回车键关闭浏览器...")
                 await browser.close()
 
@@ -1203,8 +1213,8 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         and task_config.get("account_state_file").strip()
     ):
         pause_cookie_path = task_config.get("account_state_file").strip()
-    elif os.path.exists(STATE_FILE):
-        pause_cookie_path = STATE_FILE
+    elif os.path.exists(scraper_settings.state_file):
+        pause_cookie_path = scraper_settings.state_file
 
     decision = FAILURE_GUARD.should_skip_start(
         task_name_for_guard, cookie_path=pause_cookie_path
@@ -1215,7 +1225,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         )
         if decision.should_notify:
             try:
-                await send_ntfy_notification(
+                await send_product_notification(
                     {
                         "商品标题": f"[任务暂停] {task_name_for_guard}",
                         "当前售价": "N/A",
@@ -1226,6 +1236,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                     f"连续失败: {decision.consecutive_failures}/{FAILURE_GUARD.threshold}\n"
                     f"暂停到: {decision.paused_until.strftime('%Y-%m-%d %H:%M:%S') if decision.paused_until else 'N/A'}\n"
                     "修复方法: 更新登录态/cookies文件后会自动恢复。",
+                    task_config.get("tenant_id"),
                 )
             except Exception as e:
                 print(f"发送任务暂停通知失败: {e}")
@@ -1264,7 +1275,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             print(last_error)
             break
 
-        state_path = selected_account.value if selected_account else STATE_FILE
+        state_path = selected_account.value if selected_account else scraper_settings.state_file
         last_state_path = state_path
         proxy_server = selected_proxy.value if selected_proxy else None
         if rotation_settings["account_enabled"]:

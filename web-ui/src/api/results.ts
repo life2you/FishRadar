@@ -93,3 +93,20 @@ export async function updateItemStatus(
     body: JSON.stringify({ status }),
   })
 }
+
+export async function reanalyzeResultFile(
+  filename: string,
+  tenantId?: number | null,
+): Promise<{
+  message: string
+  task_id: number | null
+  task_name: string
+  updated_count: number
+  failed_count: number
+  total_count: number
+}> {
+  return await http(`/api/results/${filename}/reanalyze`, {
+    method: 'POST',
+    params: tenantId ? { tenant_id: tenantId } : undefined,
+  })
+}

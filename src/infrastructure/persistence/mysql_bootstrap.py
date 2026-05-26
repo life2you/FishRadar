@@ -8,13 +8,21 @@ import json
 import threading
 from pathlib import Path
 
-from src.infrastructure.persistence.sqlite_connection import init_schema, sqlite_connection
+from src.infrastructure.persistence.mysql_connection import init_schema, mysql_connection
 from src.infrastructure.persistence.storage_names import (
     build_result_filename,
     normalize_keyword_from_filename,
     normalize_keyword_slug,
 )
+from src.services.account_state_service import (
+    ACCOUNT_STATE_KIND_ACCOUNT,
+    ACCOUNT_STATE_KIND_DEFAULT,
+    DEFAULT_LOGIN_STATE_NAME,
+    ensure_account_states_table,
+    get_legacy_account_state_dir,
+)
 from src.services.auth_service import bootstrap_default_auth_data
+from src.services.task_prompt_service import build_task_prompt_payload
 
 
 BOOTSTRAP_LOCK = threading.Lock()
@@ -24,9 +32,10 @@ LEGACY_PRICE_HISTORY_DIR = "price_history"
 TASKS_BOOTSTRAP_KEY = "bootstrap:legacy_tasks"
 RESULTS_BOOTSTRAP_KEY = "bootstrap:legacy_results"
 SNAPSHOTS_BOOTSTRAP_KEY = "bootstrap:legacy_price_snapshots"
+ACCOUNT_STATES_BOOTSTRAP_KEY = "bootstrap:legacy_account_states"
 
 
-def bootstrap_sqlite_storage(
+def bootstrap_mysql_storage(
     db_path: str | None = None,
     *,
     legacy_config_file: str | None = LEGACY_CONFIG_FILE,
@@ -36,11 +45,12 @@ def bootstrap_sqlite_storage(
     if db_path is not None:
         raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
     with BOOTSTRAP_LOCK:
-        with sqlite_connection() as conn:
+        with mysql_connection() as conn:
             init_schema(conn)
             _import_tasks_if_needed(conn, legacy_config_file)
             _import_results_if_needed(conn, legacy_result_dir)
             _import_price_snapshots_if_needed(conn, legacy_price_history_dir)
+            _import_account_states_if_needed(conn)
         bootstrap_default_auth_data()
 
 
@@ -79,15 +89,31 @@ def _import_tasks_if_needed(conn, legacy_config_file: str | None) -> None:
     for index, raw_task in enumerate(tasks):
         if not isinstance(raw_task, dict):
             continue
+        decision_mode = str(raw_task.get("decision_mode", "ai") or "ai").strip().lower()
+        if decision_mode not in {"ai", "keyword"}:
+            decision_mode = "ai"
+        prompt_payload = {
+            "ai_prompt_base_file": raw_task.get("ai_prompt_base_file", "prompts/base_prompt.txt"),
+            "ai_prompt_criteria_file": raw_task.get("ai_prompt_criteria_file", ""),
+            "ai_prompt_base_text": "",
+            "ai_prompt_criteria_text": "",
+            "ai_prompt_text": "",
+        }
+        if decision_mode == "ai":
+            prompt_payload = build_task_prompt_payload(
+                base_prompt_file=str(raw_task.get("ai_prompt_base_file", "prompts/base_prompt.txt")),
+                criteria_file=str(raw_task.get("ai_prompt_criteria_file", "")),
+            )
         conn.execute(
             """
             INSERT INTO tasks (
                 id, task_name, enabled, keyword, description, analyze_images,
                 max_pages, personal_only, min_price, max_price, cron,
-                ai_prompt_base_file, ai_prompt_criteria_file, account_state_file,
+                ai_prompt_base_file, ai_prompt_criteria_file, ai_prompt_base_text,
+                ai_prompt_criteria_text, ai_prompt_text, account_state_file,
                 account_strategy, free_shipping, new_publish_option, region,
                 decision_mode, keyword_rules_json, is_running
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 index,
@@ -101,14 +127,17 @@ def _import_tasks_if_needed(conn, legacy_config_file: str | None) -> None:
                 raw_task.get("min_price"),
                 raw_task.get("max_price"),
                 raw_task.get("cron"),
-                raw_task.get("ai_prompt_base_file", "prompts/base_prompt.txt"),
-                raw_task.get("ai_prompt_criteria_file", ""),
+                prompt_payload["ai_prompt_base_file"],
+                prompt_payload["ai_prompt_criteria_file"],
+                prompt_payload["ai_prompt_base_text"],
+                prompt_payload["ai_prompt_criteria_text"],
+                prompt_payload["ai_prompt_text"],
                 raw_task.get("account_state_file"),
                 raw_task.get("account_strategy", "auto"),
                 _as_int(raw_task.get("free_shipping", True)),
                 raw_task.get("new_publish_option"),
                 raw_task.get("region"),
-                raw_task.get("decision_mode", "ai"),
+                decision_mode,
                 json.dumps(raw_task.get("keyword_rules") or [], ensure_ascii=False),
                 _as_int(raw_task.get("is_running", False)),
             ),
@@ -172,6 +201,48 @@ def _import_price_snapshots_if_needed(conn, legacy_price_history_dir: str) -> No
                     continue
                 _insert_price_snapshot(conn, record)
     _mark_bootstrap_completed(conn, SNAPSHOTS_BOOTSTRAP_KEY)
+    conn.commit()
+
+
+def _import_account_states_if_needed(conn) -> None:
+    if _bootstrap_completed(conn, ACCOUNT_STATES_BOOTSTRAP_KEY):
+        return
+
+    ensure_account_states_table(conn)
+    now = _now_iso()
+    legacy_state_dir = Path(get_legacy_account_state_dir())
+    if legacy_state_dir.exists():
+        for path in sorted(legacy_state_dir.glob("*.json")):
+            content = path.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+            conn.execute(
+                """
+                INSERT INTO account_states (name, kind, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    state_json = VALUES(state_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (path.stem, ACCOUNT_STATE_KIND_ACCOUNT, content, now, now),
+            )
+
+    default_state_path = Path("xianyu_state.json")
+    if default_state_path.exists():
+        content = default_state_path.read_text(encoding="utf-8").strip()
+        if content:
+            conn.execute(
+                """
+                INSERT INTO account_states (name, kind, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    state_json = VALUES(state_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (DEFAULT_LOGIN_STATE_NAME, ACCOUNT_STATE_KIND_DEFAULT, content, now, now),
+            )
+
+    _mark_bootstrap_completed(conn, ACCOUNT_STATES_BOOTSTRAP_KEY)
     conn.commit()
 
 
@@ -298,3 +369,9 @@ def _mark_bootstrap_completed(conn, key: str) -> None:
         """,
         (key,),
     )
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")

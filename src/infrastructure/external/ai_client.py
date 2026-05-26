@@ -15,6 +15,7 @@ from src.ai_message_builder import (
     build_user_message_content,
 )
 from src.infrastructure.config.settings import AISettings
+from src.domain.models.ai_account import AIAccount
 from src.infrastructure.config.env_manager import env_manager
 from src.services.ai_request_compat import (
     CHAT_COMPLETIONS_API_MODE,
@@ -69,7 +70,8 @@ def _sanitize_no_proxy_env() -> None:
 class AIClient:
     """AI 客户端封装"""
 
-    def __init__(self):
+    def __init__(self, account: AIAccount | None = None):
+        self.account = account
         self.settings: Optional[AISettings] = None
         self.client: Optional[AsyncOpenAI] = None
         self.refresh()
@@ -84,12 +86,16 @@ class AIClient:
 
     def _initialize_client(self) -> Optional[AsyncOpenAI]:
         """初始化 OpenAI 客户端"""
-        if not self.settings or not self.settings.is_configured():
+        if self.account:
+            if not self.account.base_url or not self.account.model_name:
+                print("警告：AI账号配置不完整，AI 功能将不可用")
+                return None
+        elif not self.settings or not self.settings.is_configured():
             print("警告：AI 配置不完整，AI 功能将不可用")
             return None
 
         try:
-            if self.settings.proxy_url:
+            if self.settings and self.settings.proxy_url:
                 print(f"正在为 AI 请求使用代理: {self.settings.proxy_url}")
                 os.environ['HTTP_PROXY'] = self.settings.proxy_url
                 os.environ['HTTPS_PROXY'] = self.settings.proxy_url
@@ -97,8 +103,8 @@ class AIClient:
             _sanitize_no_proxy_env()
 
             return AsyncOpenAI(
-                api_key=self.settings.api_key,
-                base_url=self.settings.base_url
+                api_key=self.account.api_key if self.account else self.settings.api_key,
+                base_url=self.account.base_url if self.account else self.settings.base_url
             )
         except Exception as e:
             print(f"初始化 AI 客户端失败: {e}")
@@ -193,13 +199,14 @@ class AIClient:
             if enable_json_output is None
             else enable_json_output
         )
+        account = getattr(self, "account", None)
         use_temperature = True
         max_attempts = 4
 
         for attempt in range(max_attempts):
             request_params = build_ai_request_params(
                 api_mode,
-                model=self.settings.model_name,
+                model=account.model_name if account else self.settings.model_name,
                 messages=messages,
                 temperature=temperature,
                 max_output_tokens=max_output_tokens,
@@ -208,7 +215,7 @@ class AIClient:
             if not use_temperature:
                 request_params = remove_temperature_param(request_params)
 
-            if self.settings.enable_thinking:
+            if self.settings and self.settings.enable_thinking:
                 request_params["extra_body"] = {"enable_thinking": False}
 
             try:

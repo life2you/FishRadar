@@ -2,6 +2,7 @@
 设置管理路由
 """
 import os
+import re
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -15,6 +16,7 @@ from src.infrastructure.config.settings import (
     reload_settings,
     scraper_settings,
 )
+from src.domain.models.ai_account import AIAccountCreate, AIAccountUpdate
 from src.services.ai_request_compat import (
     CHAT_COMPLETIONS_API_MODE,
     RESPONSES_API_MODE,
@@ -43,7 +45,22 @@ from src.services.auth_service import (
     list_tenants,
     update_tenant_access,
 )
+from src.services.tenant_notification_access_service import (
+    get_tenant_notification_channels,
+    save_tenant_notification_channels,
+)
 from src.domain.models.auth import AuthenticatedUser
+from src.services.ai_account_service import (
+    create_ai_account,
+    delete_ai_account,
+    get_ai_account,
+    has_configured_ai_provider,
+    list_ai_accounts,
+    record_ai_account_test_result,
+    redact_ai_account,
+    update_ai_account,
+)
+from src.services.account_state_service import has_default_login_state_sync
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -75,6 +92,18 @@ def _env_int(key: str, default: int) -> int:
 
 def _normalize_bool_value(value: bool) -> str:
     return "true" if value else "false"
+
+
+def _compact_ai_test_error(exc: Exception) -> str:
+    raw_message = str(exc).strip() or exc.__class__.__name__
+    compact_message = re.sub(r"<[^>]+>", " ", raw_message)
+    compact_message = re.sub(r"\s+", " ", compact_message).strip(" .")
+    lower_message = compact_message.lower()
+    if "example domain" in lower_message:
+        return "接口返回了网页内容，请检查 API Base URL 是否填写正确。"
+    if compact_message and compact_message != raw_message:
+        return compact_message[:140]
+    return raw_message[:140]
 
 
 class NotificationSettingsModel(BaseModel):
@@ -114,12 +143,17 @@ class AISettingsModel(BaseModel):
     PROXY_URL: Optional[str] = None
 
 
+class AIAccountTestModel(BaseModel):
+    api_key: Optional[str] = None
+    base_url: str
+    model_name: str
+
+
 class RotationSettingsModel(BaseModel):
     ACCOUNT_ROTATION_ENABLED: Optional[bool] = None
     ACCOUNT_ROTATION_MODE: Optional[str] = None
     ACCOUNT_ROTATION_RETRY_LIMIT: Optional[int] = None
     ACCOUNT_BLACKLIST_TTL: Optional[int] = None
-    ACCOUNT_STATE_DIR: Optional[str] = None
     PROXY_ROTATION_ENABLED: Optional[bool] = None
     PROXY_ROTATION_MODE: Optional[str] = None
     PROXY_POOL: Optional[str] = None
@@ -138,6 +172,10 @@ class ActivationCodeCreateModel(BaseModel):
     quantity: int = Field(default=5, ge=1, le=100)
     duration_minutes: int = Field(default=1440, ge=1, le=525600)
     note: Optional[str] = None
+
+
+class TenantNotificationChannelsModel(BaseModel):
+    channels: list[str] = Field(default_factory=list)
 
 
 @router.get("/notifications")
@@ -198,6 +236,25 @@ async def test_notification_settings(payload: NotificationTestRequest):
     return {
         "message": "测试通知已执行",
         "results": results,
+    }
+
+
+@router.get("/tenant-notification-channels")
+async def get_tenant_notification_channel_settings(
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    return {"channels": await get_tenant_notification_channels()}
+
+
+@router.put("/tenant-notification-channels")
+async def update_tenant_notification_channel_settings(
+    payload: TenantNotificationChannelsModel,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    channels = await save_tenant_notification_channels(payload.channels)
+    return {
+        "message": "租户可用通知方式已更新",
+        "channels": channels,
     }
 
 
@@ -266,7 +323,6 @@ async def get_rotation_settings():
         "ACCOUNT_ROTATION_MODE": env_manager.get_value("ACCOUNT_ROTATION_MODE", "per_task"),
         "ACCOUNT_ROTATION_RETRY_LIMIT": _env_int("ACCOUNT_ROTATION_RETRY_LIMIT", 2),
         "ACCOUNT_BLACKLIST_TTL": _env_int("ACCOUNT_BLACKLIST_TTL", 300),
-        "ACCOUNT_STATE_DIR": env_manager.get_value("ACCOUNT_STATE_DIR", "state"),
         "PROXY_ROTATION_ENABLED": _env_bool("PROXY_ROTATION_ENABLED", False),
         "PROXY_ROTATION_MODE": env_manager.get_value("PROXY_ROTATION_MODE", "per_task"),
         "PROXY_POOL": env_manager.get_value("PROXY_POOL", ""),
@@ -291,17 +347,110 @@ async def update_rotation_settings(settings: RotationSettingsModel):
     return {"message": "轮换设置已成功更新"}
 
 
+@router.get("/ai-accounts")
+async def get_ai_accounts(
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    items = [redact_ai_account(account) for account in await list_ai_accounts()]
+    return {"items": items}
+
+
+@router.post("/ai-accounts")
+async def post_ai_account(
+    payload: AIAccountCreate,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    if not payload.supports_image and not payload.supports_text:
+        raise HTTPException(status_code=422, detail="至少需要开启一种能力：图片分析或文本分析")
+    created = await create_ai_account(payload)
+    return {"message": "AI账号已创建", "item": redact_ai_account(created)}
+
+
+@router.patch("/ai-accounts/{account_id}")
+async def patch_ai_account(
+    account_id: int,
+    payload: AIAccountUpdate,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    existing = await get_ai_account(account_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="AI账号未找到")
+
+    final_supports_image = payload.supports_image if payload.supports_image is not None else existing.supports_image
+    final_supports_text = payload.supports_text if payload.supports_text is not None else existing.supports_text
+    if not final_supports_image and not final_supports_text:
+        raise HTTPException(status_code=422, detail="至少需要开启一种能力：图片分析或文本分析")
+
+    updated = await update_ai_account(account_id, payload)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="AI账号未找到")
+    return {"message": "AI账号已更新", "item": redact_ai_account(updated)}
+
+
+@router.delete("/ai-accounts/{account_id}")
+async def remove_ai_account(
+    account_id: int,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    deleted = await delete_ai_account(account_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="AI账号未找到")
+    return {"message": "AI账号已删除"}
+
+
+@router.post("/ai-accounts/test")
+async def test_ai_account_settings(
+    settings: AIAccountTestModel,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    return await _run_ai_test(
+        {
+            "OPENAI_API_KEY": settings.api_key or "",
+            "OPENAI_BASE_URL": settings.base_url,
+            "OPENAI_MODEL_NAME": settings.model_name,
+            "PROXY_URL": env_manager.get_value("PROXY_URL", ""),
+        }
+    )
+
+
+@router.post("/ai-accounts/{account_id}/test")
+async def test_existing_ai_account(
+    account_id: int,
+    _current_user: AuthenticatedUser = Depends(require_admin_user),
+):
+    account = await get_ai_account(account_id)
+    if account is None:
+        raise HTTPException(status_code=404, detail="AI账号未找到")
+
+    result = await _run_ai_test(
+        {
+            "OPENAI_API_KEY": account.api_key or "",
+            "OPENAI_BASE_URL": account.base_url,
+            "OPENAI_MODEL_NAME": account.model_name,
+            "PROXY_URL": env_manager.get_value("PROXY_URL", ""),
+        }
+    )
+    updated = await record_ai_account_test_result(
+        account_id,
+        success=bool(result.get("success")),
+        message=str(result.get("message") or ""),
+    )
+    return {
+        **result,
+        "item": redact_ai_account(updated) if updated else None,
+    }
+
+
 @router.get("/status")
 async def get_system_status(
     process_service: ProcessService = Depends(get_process_service),
 ):
     state_file = "xianyu_state.json"
-    login_state_exists = os.path.exists(state_file)
+    login_state_exists = has_default_login_state_sync()
     env_file_exists = os.path.exists(env_manager.env_file)
     openai_api_key = env_manager.get_value("OPENAI_API_KEY", "")
     openai_base_url = env_manager.get_value("OPENAI_BASE_URL", "")
     openai_model_name = env_manager.get_value("OPENAI_MODEL_NAME", "")
-    ai_settings = AISettings()
     notification_settings = load_notification_settings()
     running_task_ids = [
         task_id
@@ -310,7 +459,7 @@ async def get_system_status(
     ]
 
     return {
-        "ai_configured": ai_settings.is_configured(),
+        "ai_configured": await has_configured_ai_provider(),
         "notification_configured": notification_settings.has_any_notification_enabled(),
         "headless_mode": scraper_settings.run_headless,
         "running_in_docker": scraper_settings.running_in_docker,
@@ -365,6 +514,10 @@ async def update_ai_settings(settings: AISettingsModel):
 @router.post("/ai/test")
 async def test_ai_settings(settings: dict):
     """测试AI模型设置是否有效"""
+    return await _run_ai_test(settings)
+
+
+async def _run_ai_test(settings: dict):
     try:
         from openai import OpenAI
         import httpx
@@ -422,5 +575,5 @@ async def test_ai_settings(settings: dict):
     except Exception as exc:
         return {
             "success": False,
-            "message": f"AI模型连接测试失败: {exc}",
+            "message": f"AI模型连接测试失败: {_compact_ai_test_error(exc)}",
         }

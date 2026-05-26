@@ -20,7 +20,7 @@ sys.path.insert(0, str(repo_root))
 from src.api import dependencies as deps
 from src.api.routes import tasks
 from src.domain.models.auth import AuthenticatedUser
-from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
+from src.infrastructure.persistence.mysql_task_repository import MySQLTaskRepository
 from src.services.task_service import TaskService
 from src.services.task_generation_service import TaskGenerationService
 
@@ -35,8 +35,14 @@ def build_test_database_url(test_name: str) -> str:
     parsed = urlparse(DEFAULT_TEST_MYSQL_URL)
     base_database = parsed.path.lstrip("/") or "fishradar_pytest"
     suffix = re.sub(r"[^a-z0-9]+", "_", test_name.lower()).strip("_") or "case"
-    suffix = suffix[:32]
-    database_name = f"{base_database}_{suffix}_{uuid.uuid4().hex[:8]}"
+    unique_suffix = uuid.uuid4().hex[:8]
+    max_total_length = 64
+    reserved = len(unique_suffix) + 2
+    max_base_length = max_total_length - reserved - 16
+    trimmed_base = base_database[:max(12, max_base_length)]
+    max_suffix_length = max_total_length - len(trimmed_base) - reserved
+    suffix = suffix[:max(8, max_suffix_length)]
+    database_name = f"{trimmed_base}_{suffix}_{unique_suffix}"
     query = urlencode(dict(parse_qsl(parsed.query, keep_blank_values=True)) or {"charset": "utf8mb4"})
     return urlunparse(
         (
@@ -140,7 +146,7 @@ def api_context(tmp_path, monkeypatch, mysql_test_env):
     config_file = tmp_path / "config.json"
     config_file.write_text("[]", encoding="utf-8")
 
-    repository = SqliteTaskRepository(
+    repository = MySQLTaskRepository(
         legacy_config_file=None,
     )
     task_service = TaskService(repository)

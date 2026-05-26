@@ -11,12 +11,12 @@ import TasksTable from '@/components/tasks/TasksTable.vue'
 import TaskForm from '@/components/tasks/TaskForm.vue'
 import TenantPortalHero from '@/components/tenant/TenantPortalHero.vue'
 import CatchYuTaskCard from '@/components/tenant/CatchYuTaskCard.vue'
-import CatchYuTaskStudioPanel from '@/components/tenant/CatchYuTaskStudioPanel.vue'
+import CatchYuTaskStudioDialog from '@/components/tenant/CatchYuTaskStudioDialog.vue'
 import { listAccounts, type AccountItem } from '@/api/accounts'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toast'
-import { RefreshCw, Sparkles } from 'lucide-vue-next'
+import { RefreshCw } from 'lucide-vue-next'
 import {
   Dialog,
   DialogContent,
@@ -52,7 +52,9 @@ const isCriteriaSubmitting = ref(false)
 const isDeleteDialogOpen = ref(false)
 const taskToDeleteId = ref<number | null>(null)
 const accountOptions = ref<AccountItem[]>([])
-const isTenantCreateOpen = ref(false)
+const tenantTaskFilter = ref<'all' | 'running' | 'paused' | 'ai' | 'keyword'>('all')
+const tenantTaskPage = ref(1)
+const TENANT_TASK_PAGE_SIZE = 6
 const canManageFixedAccounts = computed(() => role.value === 'admin')
 const isTenantPortal = computed(() => role.value === 'tenant')
 const tenantWorkspaceName = computed(() => tenantName.value || username.value || t('common.unnamed'))
@@ -64,33 +66,57 @@ const adminTenantScopeLabel = computed(() => {
 const tenantTaskStats = computed(() => {
   const enabledCount = tasks.value.filter((task) => task.enabled).length
   const runningCount = tasks.value.filter((task) => task.is_running).length
-  const keywordCount = tasks.value.filter((task) => task.decision_mode === 'keyword').length
   const scheduledCount = tasks.value.filter((task) => Boolean(task.cron)).length
   return [
     {
       label: t('tenantPortal.tasks.stats.enabled'),
       value: String(enabledCount),
-      detail: t('tenantPortal.tasks.details.enabled'),
+      detail: undefined,
     },
     {
       label: t('tenantPortal.tasks.stats.running'),
       value: String(runningCount),
-      detail: t('tenantPortal.tasks.details.running'),
-    },
-    {
-      label: t('tenantPortal.tasks.stats.keyword'),
-      value: String(keywordCount),
-      detail: t('tenantPortal.tasks.details.keyword'),
+      detail: undefined,
     },
     {
       label: t('tenantPortal.tasks.stats.scheduled'),
       value: String(scheduledCount),
-      detail: t('tenantPortal.tasks.details.scheduled'),
+      detail: undefined,
     },
   ]
 })
-const runningTasks = computed(() => tasks.value.filter((task) => task.is_running))
-const standbyTasks = computed(() => tasks.value.filter((task) => !task.is_running))
+const tenantTaskFilterOptions = computed(() => [
+  { value: 'all', label: '全部', count: tasks.value.length },
+  { value: 'running', label: '运行中', count: tasks.value.filter((task) => task.is_running).length },
+  { value: 'paused', label: '已暂停', count: tasks.value.filter((task) => !task.enabled).length },
+  { value: 'ai', label: 'AI', count: tasks.value.filter((task) => task.decision_mode === 'ai').length },
+  { value: 'keyword', label: '关键词', count: tasks.value.filter((task) => task.decision_mode === 'keyword').length },
+])
+const filteredTenantTasks = computed(() => {
+  switch (tenantTaskFilter.value) {
+    case 'running':
+      return tasks.value.filter((task) => task.is_running)
+    case 'paused':
+      return tasks.value.filter((task) => !task.enabled)
+    case 'ai':
+      return tasks.value.filter((task) => task.decision_mode === 'ai')
+    case 'keyword':
+      return tasks.value.filter((task) => task.decision_mode === 'keyword')
+    default:
+      return tasks.value
+  }
+})
+const tenantTaskTotalPages = computed(() => Math.max(1, Math.ceil(filteredTenantTasks.value.length / TENANT_TASK_PAGE_SIZE)))
+const pagedTenantTasks = computed(() => {
+  const start = (tenantTaskPage.value - 1) * TENANT_TASK_PAGE_SIZE
+  return filteredTenantTasks.value.slice(start, start + TENANT_TASK_PAGE_SIZE)
+})
+const tenantTaskPageSummary = computed(() => {
+  if (!filteredTenantTasks.value.length) return '当前筛选下没有任务'
+  const start = (tenantTaskPage.value - 1) * TENANT_TASK_PAGE_SIZE + 1
+  const end = Math.min(tenantTaskPage.value * TENANT_TASK_PAGE_SIZE, filteredTenantTasks.value.length)
+  return `显示 ${start}-${end} / 共 ${filteredTenantTasks.value.length} 个任务`
+})
 
 const taskToDelete = computed(() => {
   if (taskToDeleteId.value === null) return null
@@ -142,15 +168,15 @@ watch(
   { immediate: true }
 )
 
-watch(
-  () => route.query.create,
-  (value) => {
-    if (value === '1' && isTenantPortal.value) {
-      isTenantCreateOpen.value = true
-    }
-  },
-  { immediate: true }
-)
+watch(tenantTaskFilter, () => {
+  tenantTaskPage.value = 1
+})
+
+watch(tenantTaskTotalPages, (totalPages) => {
+  if (tenantTaskPage.value > totalPages) {
+    tenantTaskPage.value = totalPages
+  }
+})
 
 async function handleUpdateTask(data: TaskUpdate) {
   if (!selectedTask.value) return
@@ -268,104 +294,111 @@ onMounted(fetchAccountOptions)
         :eyebrow="t('tenantPortal.eyebrow')"
         :title="t('tenantPortal.tasks.title', { tenant: tenantWorkspaceName })"
         :description="t('tenantPortal.tasks.description')"
-        :note="t('tenantPortal.note')"
         :stats="tenantTaskStats"
       >
         <template #actions>
-          <Button class="h-12 rounded-full bg-[#21160f] px-6 text-sm font-bold text-white shadow-[0_16px_36px_rgba(33,22,15,0.24)] hover:bg-[#2f2016]" @click="isTenantCreateOpen = true">
-            创建监控任务
-          </Button>
+          <CatchYuTaskStudioDialog
+            :account-options="accountOptions"
+            :allow-fixed-account="canManageFixedAccounts"
+            @created="fetchTasks"
+          />
           <Button
             variant="outline"
-            class="h-12 rounded-full border-[#dfd2c1] bg-white/80 px-5 text-[#473122] hover:bg-white"
+            class="h-10 rounded-full border-[#d4dfd5] bg-white/88 px-4 text-[13px] text-[#446050] hover:bg-white"
             :disabled="isLoading"
             @click="fetchTasks"
           >
-            <RefreshCw class="mr-2 h-4 w-4" />
+            <RefreshCw class="mr-1.5 h-3.5 w-3.5" />
             刷新任务
           </Button>
         </template>
       </TenantPortalHero>
 
-      <CatchYuTaskStudioPanel
-        v-if="isTenantCreateOpen"
-        :account-options="accountOptions"
-        :allow-fixed-account="canManageFixedAccounts"
-        @created="() => { isTenantCreateOpen = false; fetchTasks() }"
-        @cancel="isTenantCreateOpen = false"
-      />
-
-      <section class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div class="space-y-4">
-          <div class="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
-            <div>
-              <p class="text-xs font-black uppercase tracking-[0.26em] text-[#9b8165]">
-                {{ t('tenantPortal.eyebrow') }}
-              </p>
-              <h2 class="mt-2 text-2xl font-black tracking-tight text-[#241a12]">
-                {{ t('tenantPortal.tasks.queueTitle') }}
-              </h2>
-              <p class="mt-2 max-w-3xl text-sm leading-6 text-[#6b5744]">
-                {{ t('tenantPortal.tasks.queueDescription') }}
-              </p>
-            </div>
-          </div>
-
-          <div v-if="error" class="app-alert-error mb-4" role="alert">
-            <strong class="font-bold">{{ t('common.error') }}</strong>
-            <span class="block sm:inline">{{ error.message }}</span>
-          </div>
-
-          <div v-if="tasks.length === 0" class="rounded-[32px] border border-dashed border-[#dccfbf] bg-[#fffaf2] px-6 py-14 text-center">
-            <p class="text-lg font-bold text-[#4a3627]">还没有 CatchYu 任务</p>
-            <p class="mt-2 text-sm text-[#7b6956]">从“创建监控任务”开始，先配置目标商品和抓取策略。</p>
-          </div>
-
-          <div v-else class="space-y-4">
-            <CatchYuTaskCard
-              v-for="task in tasks"
-              :key="task.id"
-              :task="task"
-              :is-stopping="stoppingTaskIds.has(task.id)"
-              @delete="handleDeleteTask"
-              @edit="handleEditTask"
-              @run="handleStartTask"
-              @stop="handleStopTask"
-              @refresh-criteria="handleOpenCriteriaDialog"
-              @toggle-enabled="({ task, enabled }) => handleToggleEnabled(task, enabled)"
-            />
-          </div>
+      <section class="space-y-4">
+        <div v-if="error" class="app-alert-error" role="alert">
+          <strong class="font-bold">{{ t('common.error') }}</strong>
+          <span class="block sm:inline">{{ error.message }}</span>
         </div>
 
-        <aside class="space-y-4">
-          <section class="rounded-[30px] border border-[#eadfce] bg-[linear-gradient(180deg,rgba(255,252,246,0.98)_0%,rgba(252,247,239,0.98)_100%)] p-5 shadow-[0_24px_60px_rgba(77,56,35,0.08)]">
-            <div class="flex items-center gap-2 text-[#9b8165]">
-              <Sparkles class="h-4 w-4" />
-              <p class="text-[11px] font-bold uppercase tracking-[0.24em]">运行概况</p>
-            </div>
-            <div class="mt-4 grid gap-3">
-              <article class="rounded-[24px] border border-white/80 bg-white/85 p-4 shadow-sm">
-                <p class="text-sm font-bold text-[#2b1d13]">进行中的任务</p>
-                <p class="mt-2 text-3xl font-black tracking-[-0.04em] text-[#241a12]">{{ runningTasks.length }}</p>
-                <p class="mt-2 text-xs leading-5 text-[#6a5744]">正在抓取或等待完成停止动作的任务会优先显示在这里。</p>
-              </article>
-              <article class="rounded-[24px] border border-white/80 bg-white/85 p-4 shadow-sm">
-                <p class="text-sm font-bold text-[#2b1d13]">待命任务</p>
-                <p class="mt-2 text-3xl font-black tracking-[-0.04em] text-[#241a12]">{{ standbyTasks.length }}</p>
-                <p class="mt-2 text-xs leading-5 text-[#6a5744]">包括待手动启动和已配置调度规则的监控任务。</p>
-              </article>
+        <div v-if="isLoading" class="rounded-[28px] border border-dashed border-[#dccfbf] bg-[#fffaf2] px-6 py-12 text-center text-sm text-[#7b6956]">
+          {{ t('common.loading') }}
+        </div>
+
+        <div v-else-if="tasks.length === 0" class="rounded-[28px] border border-dashed border-[#dccfbf] bg-[#fffaf2] px-6 py-14 text-center">
+          <p class="text-lg font-bold text-[#4a3627]">还没有 CatchYu 任务</p>
+          <p class="mt-2 text-sm text-[#7b6956]">先创建一个监控任务，再回来统一管理启动、编辑和结果追踪。</p>
+        </div>
+
+        <div v-else class="space-y-4">
+          <section class="rounded-[24px] border border-[#eadfce] bg-white/88 p-4 shadow-sm">
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="option in tenantTaskFilterOptions"
+                :key="option.value"
+                type="button"
+                class="inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold transition-colors"
+                :class="tenantTaskFilter === option.value
+                  ? 'border-[#244735] bg-[#244735] text-white'
+                  : 'border-[#e1d4c1] bg-[#fffaf2] text-[#6a5744] hover:bg-white'"
+                @click="tenantTaskFilter = option.value as typeof tenantTaskFilter"
+              >
+                <span>{{ option.label }}</span>
+                <span
+                  class="rounded-full px-2 py-0.5 text-[11px] font-bold"
+                  :class="tenantTaskFilter === option.value ? 'bg-white/18 text-white' : 'bg-white text-[#8a6a4f]'"
+                >
+                  {{ option.count }}
+                </span>
+              </button>
             </div>
           </section>
 
-          <section class="rounded-[30px] border border-[#eadfce] bg-white/88 p-5 shadow-[0_24px_60px_rgba(77,56,35,0.08)]">
-            <p class="text-[11px] font-bold uppercase tracking-[0.24em] text-[#9b8165]">创建提示</p>
-            <ul class="mt-4 space-y-3 text-sm leading-6 text-[#5f4d3d]">
-              <li>AI 模式会异步生成分析标准，并在创建流程中实时显示进度。</li>
-              <li>关键词模式会直接保存并立即可启动，适合明确规则场景。</li>
-              <li>任务创建后都可以继续编辑、停用、删除或重新启动。</li>
-            </ul>
-          </section>
-        </aside>
+          <div
+            v-if="filteredTenantTasks.length === 0"
+            class="rounded-[28px] border border-dashed border-[#dccfbf] bg-[#fffaf2] px-6 py-12 text-center"
+          >
+            <p class="text-base font-bold text-[#4a3627]">当前筛选下没有任务</p>
+            <p class="mt-2 text-sm text-[#7b6956]">可以切换筛选条件，或者新建一个任务。</p>
+          </div>
+
+          <CatchYuTaskCard
+            v-for="task in pagedTenantTasks"
+            :key="task.id"
+            :task="task"
+            :is-stopping="stoppingTaskIds.has(task.id)"
+            @delete="handleDeleteTask"
+            @edit="handleEditTask"
+            @run="handleStartTask"
+            @stop="handleStopTask"
+            @toggle-enabled="({ task, enabled }) => handleToggleEnabled(task, enabled)"
+          />
+
+          <div
+            v-if="filteredTenantTasks.length > TENANT_TASK_PAGE_SIZE"
+            class="flex flex-col gap-3 rounded-[24px] border border-[#eadfce] bg-[#fffaf2] px-4 py-3 text-sm text-[#6a5744] md:flex-row md:items-center md:justify-between"
+          >
+            <span>{{ tenantTaskPageSummary }}</span>
+            <div class="flex items-center gap-2">
+              <Button
+                variant="outline"
+                class="rounded-full border-[#ddcfbc] bg-white/80 px-4 text-[#473122] hover:bg-white"
+                :disabled="tenantTaskPage <= 1"
+                @click="tenantTaskPage -= 1"
+              >
+                上一页
+              </Button>
+              <span class="text-xs font-semibold text-[#8a6a4f]">第 {{ tenantTaskPage }} / {{ tenantTaskTotalPages }} 页</span>
+              <Button
+                variant="outline"
+                class="rounded-full border-[#ddcfbc] bg-white/80 px-4 text-[#473122] hover:bg-white"
+                :disabled="tenantTaskPage >= tenantTaskTotalPages"
+                @click="tenantTaskPage += 1"
+              >
+                下一页
+              </Button>
+            </div>
+          </div>
+        </div>
       </section>
     </div>
 

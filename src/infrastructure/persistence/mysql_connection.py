@@ -1,9 +1,4 @@
-"""
-MySQL-only database connection and schema initialization helpers.
-
-The historical module name is kept for compatibility with the rest of the
-codebase, but SQLite support has been fully removed.
-"""
+"""MySQL database connection and schema initialization helpers."""
 from __future__ import annotations
 
 import os
@@ -49,6 +44,9 @@ MYSQL_SCHEMA_STATEMENTS = (
         cron VARCHAR(255) COMMENT 'Cron调度表达式',
         ai_prompt_base_file VARCHAR(255) NOT NULL COMMENT 'AI基础提示词文件路径',
         ai_prompt_criteria_file VARCHAR(255) NOT NULL COMMENT 'AI分析标准文件路径',
+        ai_prompt_base_text LONGTEXT NULL COMMENT 'AI基础提示词文本',
+        ai_prompt_criteria_text LONGTEXT NULL COMMENT 'AI分析标准文本',
+        ai_prompt_text LONGTEXT NULL COMMENT '最终AI提示词文本',
         account_state_file VARCHAR(255) COMMENT '绑定账号登录态文件路径',
         account_strategy VARCHAR(32) NOT NULL COMMENT '账号使用策略',
         free_shipping TINYINT(1) NOT NULL COMMENT '是否筛选包邮商品',
@@ -156,6 +154,17 @@ MYSQL_SCHEMA_STATEMENTS = (
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录会话表'
     """,
     """
+    CREATE TABLE IF NOT EXISTS account_states (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '登录态记录ID',
+        name VARCHAR(255) NOT NULL COMMENT '登录态名称',
+        kind VARCHAR(32) NOT NULL COMMENT '登录态类型(account/default)',
+        state_json LONGTEXT NOT NULL COMMENT '登录态JSON内容',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+        updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+        UNIQUE KEY uniq_account_state_kind_name (kind, name)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='登录态存储表'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS activation_codes (
         id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '卡密ID',
         code VARCHAR(255) NOT NULL UNIQUE COMMENT '激活卡密',
@@ -168,6 +177,29 @@ MYSQL_SCHEMA_STATEMENTS = (
         redeemed_at VARCHAR(64) NULL COMMENT '兑换时间',
         created_at VARCHAR(64) NOT NULL COMMENT '创建时间'
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户激活卡密表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS tenant_notification_settings (
+        tenant_id BIGINT PRIMARY KEY COMMENT '租户ID',
+        settings_json LONGTEXT NOT NULL COMMENT '通知配置JSON',
+        updated_at VARCHAR(64) NOT NULL COMMENT '更新时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户通知配置表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS ai_accounts (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'AI账号ID',
+        name VARCHAR(255) NOT NULL COMMENT 'AI账号名称',
+        api_key TEXT NULL COMMENT 'AI账号密钥',
+        base_url VARCHAR(512) NOT NULL COMMENT 'AI接口地址',
+        model_name VARCHAR(255) NOT NULL COMMENT '模型名称',
+        supports_image TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否支持图片分析',
+        supports_text TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否支持纯文本分析',
+        enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+        priority INT NOT NULL DEFAULT 100 COMMENT '优先级，越小越优先',
+        notes TEXT NULL COMMENT '备注说明',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+        updated_at VARCHAR(64) NOT NULL COMMENT '更新时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI账号池表'
     """,
 )
 
@@ -222,11 +254,15 @@ MYSQL_INDEX_DEFINITIONS = (
     ("idx_users_username", "users", "CREATE INDEX idx_users_username ON users(username)"),
     ("idx_auth_sessions_user_id", "auth_sessions", "CREATE INDEX idx_auth_sessions_user_id ON auth_sessions(user_id)"),
     ("idx_activation_codes_status", "activation_codes", "CREATE INDEX idx_activation_codes_status ON activation_codes(status)"),
+    ("idx_ai_accounts_enabled_priority", "ai_accounts", "CREATE INDEX idx_ai_accounts_enabled_priority ON ai_accounts(enabled, priority, id)"),
 )
 
 MYSQL_TENANT_COLUMNS_MIGRATION_KEY = "migration:mysql_tenant_columns_v1"
 MYSQL_TENANT_ACCESS_MIGRATION_KEY = "migration:mysql_tenant_access_v2"
 MYSQL_COMMENT_MIGRATION_KEY = "migration:mysql_schema_comments_v2"
+MYSQL_AI_ACCOUNTS_MIGRATION_KEY = "migration:mysql_ai_accounts_v1"
+MYSQL_TASK_PROMPT_STORAGE_MIGRATION_KEY = "migration:mysql_task_prompt_storage_v1"
+MYSQL_ACCOUNT_STATES_MIGRATION_KEY = "migration:mysql_account_states_v1"
 
 MYSQL_COMMENT_STATEMENTS = (
     """
@@ -251,6 +287,9 @@ MYSQL_COMMENT_STATEMENTS = (
     MODIFY COLUMN cron VARCHAR(255) NULL COMMENT 'Cron调度表达式',
     MODIFY COLUMN ai_prompt_base_file VARCHAR(255) NOT NULL COMMENT 'AI基础提示词文件路径',
     MODIFY COLUMN ai_prompt_criteria_file VARCHAR(255) NOT NULL COMMENT 'AI分析标准文件路径',
+    MODIFY COLUMN ai_prompt_base_text LONGTEXT NULL COMMENT 'AI基础提示词文本',
+    MODIFY COLUMN ai_prompt_criteria_text LONGTEXT NULL COMMENT 'AI分析标准文本',
+    MODIFY COLUMN ai_prompt_text LONGTEXT NULL COMMENT '最终AI提示词文本',
     MODIFY COLUMN account_state_file VARCHAR(255) NULL COMMENT '绑定账号登录态文件路径',
     MODIFY COLUMN account_strategy VARCHAR(32) NOT NULL COMMENT '账号使用策略',
     MODIFY COLUMN free_shipping TINYINT(1) NOT NULL COMMENT '是否筛选包邮商品',
@@ -313,6 +352,22 @@ MYSQL_COMMENT_STATEMENTS = (
     COMMENT = '结果黑名单规则表'
     """,
     """
+    ALTER TABLE ai_accounts
+    MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT 'AI账号ID',
+    MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT 'AI账号名称',
+    MODIFY COLUMN api_key TEXT NULL COMMENT 'AI账号密钥',
+    MODIFY COLUMN base_url VARCHAR(512) NOT NULL COMMENT 'AI接口地址',
+    MODIFY COLUMN model_name VARCHAR(255) NOT NULL COMMENT '模型名称',
+    MODIFY COLUMN supports_image TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否支持图片分析',
+    MODIFY COLUMN supports_text TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否支持纯文本分析',
+    MODIFY COLUMN enabled TINYINT(1) NOT NULL DEFAULT 1 COMMENT '是否启用',
+    MODIFY COLUMN priority INT NOT NULL DEFAULT 100 COMMENT '优先级，越小越优先',
+    MODIFY COLUMN notes TEXT NULL COMMENT '备注说明',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+    COMMENT = 'AI账号池表'
+    """,
+    """
     ALTER TABLE tenants
     MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '租户ID',
     MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '租户名称',
@@ -355,6 +410,16 @@ MYSQL_COMMENT_STATEMENTS = (
     COMMENT = '登录会话表'
     """,
     """
+    ALTER TABLE account_states
+    MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '登录态记录ID',
+    MODIFY COLUMN name VARCHAR(255) NOT NULL COMMENT '登录态名称',
+    MODIFY COLUMN kind VARCHAR(32) NOT NULL COMMENT '登录态类型(account/default)',
+    MODIFY COLUMN state_json LONGTEXT NOT NULL COMMENT '登录态JSON内容',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+    COMMENT = '登录态存储表'
+    """,
+    """
     ALTER TABLE activation_codes
     MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '卡密ID',
     MODIFY COLUMN code VARCHAR(255) NOT NULL COMMENT '激活卡密',
@@ -367,6 +432,13 @@ MYSQL_COMMENT_STATEMENTS = (
     MODIFY COLUMN redeemed_at VARCHAR(64) NULL COMMENT '兑换时间',
     MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
     COMMENT = '租户激活卡密表'
+    """,
+    """
+    ALTER TABLE tenant_notification_settings
+    MODIFY COLUMN tenant_id BIGINT NOT NULL COMMENT '租户ID',
+    MODIFY COLUMN settings_json LONGTEXT NOT NULL COMMENT '通知配置JSON',
+    MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+    COMMENT = '租户通知配置表'
     """,
 )
 
@@ -542,6 +614,8 @@ def init_schema(conn: DatabaseConnection) -> None:
     _migrate_tenant_columns(conn)
     _migrate_tenant_access_controls(conn)
     _migrate_result_items_status(conn)
+    _migrate_task_prompt_storage(conn)
+    _migrate_account_states(conn)
     _apply_mysql_comments(conn)
     for index_name, table_name, statement in MYSQL_INDEX_DEFINITIONS:
         if not _mysql_index_exists(conn, table_name, index_name):
@@ -654,14 +728,107 @@ def _apply_mysql_comments(conn: DatabaseConnection) -> None:
     )
 
 
-@contextmanager
-def sqlite_connection(db_path: str | None = None) -> Iterator[DatabaseConnection]:
-    """
-    Historical helper name kept for compatibility.
+def _migrate_task_prompt_storage(conn: DatabaseConnection) -> None:
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE `key` = ?",
+        (MYSQL_TASK_PROMPT_STORAGE_MIGRATION_KEY,),
+    ).fetchone()
+    if row is not None:
+        return
 
-    SQLite support has been removed. All callers now connect to MySQL through
-    APP_DATABASE_URL.
-    """
+    column_definitions = (
+        ("ai_prompt_base_text", "LONGTEXT NULL COMMENT 'AI基础提示词文本'"),
+        ("ai_prompt_criteria_text", "LONGTEXT NULL COMMENT 'AI分析标准文本'"),
+        ("ai_prompt_text", "LONGTEXT NULL COMMENT '最终AI提示词文本'"),
+    )
+    for column_name, column_sql in column_definitions:
+        if not _mysql_column_exists(conn, "tasks", column_name):
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {column_name} {column_sql}")
+
+    from src.services.task_prompt_service import build_task_prompt_payload
+
+    rows = conn.execute(
+        """
+        SELECT id, decision_mode, ai_prompt_base_file, ai_prompt_criteria_file,
+               ai_prompt_base_text, ai_prompt_criteria_text, ai_prompt_text
+        FROM tasks
+        """
+    ).fetchall()
+    for row in rows:
+        decision_mode = str(row.get("decision_mode") or "ai").strip().lower()
+        if decision_mode == "keyword":
+            conn.execute(
+                """
+                UPDATE tasks
+                SET ai_prompt_base_text = COALESCE(ai_prompt_base_text, ''),
+                    ai_prompt_criteria_text = COALESCE(ai_prompt_criteria_text, ''),
+                    ai_prompt_text = ''
+                WHERE id = ?
+                """,
+                (row["id"],),
+            )
+            continue
+
+        payload = build_task_prompt_payload(
+            base_prompt_file=str(row.get("ai_prompt_base_file") or "").strip(),
+            criteria_file=str(row.get("ai_prompt_criteria_file") or "").strip(),
+            base_prompt_text=row.get("ai_prompt_base_text"),
+            criteria_text=row.get("ai_prompt_criteria_text"),
+        )
+        conn.execute(
+            """
+            UPDATE tasks
+            SET ai_prompt_base_text = ?,
+                ai_prompt_criteria_text = ?,
+                ai_prompt_text = ?
+            WHERE id = ?
+            """,
+            (
+                payload["ai_prompt_base_text"],
+                payload["ai_prompt_criteria_text"],
+                payload["ai_prompt_text"],
+                row["id"],
+            ),
+        )
+
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(`key`, value) VALUES (?, 'done')",
+        (MYSQL_TASK_PROMPT_STORAGE_MIGRATION_KEY,),
+    )
+
+
+def _migrate_account_states(conn: DatabaseConnection) -> None:
+    row = conn.execute(
+        "SELECT value FROM app_metadata WHERE `key` = ?",
+        (MYSQL_ACCOUNT_STATES_MIGRATION_KEY,),
+    ).fetchone()
+    if row is not None:
+        return
+    if not _mysql_column_exists(conn, "account_states", "kind"):
+        conn.execute(
+            "ALTER TABLE account_states ADD COLUMN kind VARCHAR(32) NOT NULL DEFAULT 'account' COMMENT '登录态类型(account/default)'"
+        )
+    if not _mysql_column_exists(conn, "account_states", "state_json"):
+        conn.execute(
+            "ALTER TABLE account_states ADD COLUMN state_json LONGTEXT NOT NULL COMMENT '登录态JSON内容'"
+        )
+    if not _mysql_column_exists(conn, "account_states", "created_at"):
+        conn.execute(
+            "ALTER TABLE account_states ADD COLUMN created_at VARCHAR(64) NOT NULL DEFAULT '' COMMENT '创建时间'"
+        )
+    if not _mysql_column_exists(conn, "account_states", "updated_at"):
+        conn.execute(
+            "ALTER TABLE account_states ADD COLUMN updated_at VARCHAR(64) NOT NULL DEFAULT '' COMMENT '更新时间'"
+        )
+    conn.execute(
+        "INSERT OR REPLACE INTO app_metadata(`key`, value) VALUES (?, 'done')",
+        (MYSQL_ACCOUNT_STATES_MIGRATION_KEY,),
+    )
+
+
+@contextmanager
+def mysql_connection(db_path: str | None = None) -> Iterator[DatabaseConnection]:
+    """Connect to MySQL through APP_DATABASE_URL."""
     if db_path is not None:
         raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
 

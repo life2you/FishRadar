@@ -271,6 +271,26 @@ export function useResults() {
     }
   }
 
+  async function reanalyzeSelectedResults() {
+    if (!selectedFile.value) return null
+    isLoading.value = true
+    error.value = null
+    try {
+      const payload = await resultsApi.reanalyzeResultFile(
+        selectedFile.value,
+        adminTenantId.value ?? undefined,
+      )
+      await fetchResults()
+      await fetchInsights()
+      return payload
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isLoading.value = false
+    }
+  }
+
   // Watchers
   watch(filters, (val) => {
     localStorage.setItem(STORAGE_KEY_FILTERS, JSON.stringify(val))
@@ -331,6 +351,7 @@ export function useResults() {
     refreshResults,
     exportSelectedResults,
     deleteSelectedFile,
+    reanalyzeSelectedResults,
     toggleItemBlock,
     blacklistKeywords,
     isSavingBlacklist,

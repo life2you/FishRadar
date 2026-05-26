@@ -1,12 +1,12 @@
-"""
-登录状态管理路由
-"""
-import os
-import json
-import aiofiles
+"""登录状态管理路由"""
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from src.services.account_state_service import (
+    delete_default_login_state_sync,
+    upsert_default_login_state_sync,
+    validate_state_json,
+)
 
 router = APIRouter(prefix="/api/login-state", tags=["login-state"])
 
@@ -20,33 +20,26 @@ class LoginStateUpdate(BaseModel):
 async def update_login_state(
     data: LoginStateUpdate,
 ):
-    """接收前端发送的登录状态JSON字符串，并保存到 xianyu_state.json"""
-    state_file = "xianyu_state.json"
+    """接收前端发送的登录状态JSON字符串，并保存到数据库。"""
 
     try:
-        # 验证是否是有效的JSON
-        json.loads(data.content)
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="提供的内容不是有效的JSON格式。")
-
-    try:
-        async with aiofiles.open(state_file, 'w', encoding='utf-8') as f:
-            await f.write(data.content)
-        return {"message": f"登录状态文件 '{state_file}' 已成功更新。"}
+        validate_state_json(data.content)
+        upsert_default_login_state_sync(data.content)
+        return {"message": "默认登录状态已成功更新。"}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"写入登录状态文件时出错: {e}")
+        raise HTTPException(status_code=500, detail=f"写入默认登录状态时出错: {e}")
 
 
 @router.delete("", response_model=dict)
 async def delete_login_state():
-    """删除 xianyu_state.json 文件"""
-    state_file = "xianyu_state.json"
+    """删除默认登录状态。"""
+    try:
+        deleted = delete_default_login_state_sync()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除默认登录状态时出错: {e}")
 
-    if os.path.exists(state_file):
-        try:
-            os.remove(state_file)
-            return {"message": "登录状态文件已成功删除。"}
-        except OSError as e:
-            raise HTTPException(status_code=500, detail=f"删除登录状态文件时出错: {e}")
-
-    return {"message": "登录状态文件不存在，无需删除。"}
+    if deleted:
+        return {"message": "默认登录状态已成功删除。"}
+    return {"message": "默认登录状态不存在，无需删除。"}

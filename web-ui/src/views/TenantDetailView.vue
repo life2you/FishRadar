@@ -123,7 +123,7 @@ watch(() => route.params.tenantId, fetchTenantDetail)
 </script>
 
 <template>
-  <div class="space-y-6">
+  <div class="space-y-5">
     <div class="flex flex-wrap items-center justify-between gap-3">
       <Button variant="outline" class="rounded-full" @click="router.push({ name: 'Tenants' })">
         <ArrowLeft class="mr-2 h-4 w-4" />
@@ -135,28 +135,28 @@ watch(() => route.params.tenantId, fetchTenantDetail)
       </Button>
     </div>
 
-    <section class="overflow-hidden rounded-[32px] border border-slate-200/80 bg-[linear-gradient(135deg,#08111f_0%,#13233a_46%,#d6e3ef_220%)] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.18)] md:px-8">
-      <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-        <div class="max-w-3xl">
-          <p class="text-xs font-black uppercase tracking-[0.32em] text-slate-300">CatchYu Console</p>
-          <h1 class="mt-3 text-3xl font-black tracking-tight md:text-4xl">
+    <section class="overflow-hidden rounded-[24px] border border-[#cfddd5] bg-[linear-gradient(135deg,#f6faf6_0%,#edf4ef_46%,#e9f2f4_100%)] px-4.5 py-4.5 text-[#203228] shadow-[0_14px_34px_rgba(76,104,84,0.09)] md:px-5">
+      <div class="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div class="max-w-[42rem]">
+          <p class="text-[11px] font-black uppercase tracking-[0.3em] text-[#72907f]">CatchYu Console</p>
+          <h1 class="mt-2 text-[1.65rem] font-black tracking-tight text-[#203228] md:text-[1.95rem]">
             {{ detail?.tenant.name || t('tenantDetail.loadingTitle') }}
           </h1>
-          <p class="mt-3 text-sm leading-7 text-slate-300 md:text-base">
+          <p class="mt-1.5 text-[13px] leading-6 text-[#597264] md:text-[14px]">
             {{ detail?.tenant.slug || '' }} · {{ t('tenantDetail.description') }}
           </p>
-          <div class="mt-4 flex flex-wrap items-center gap-2">
-            <Badge variant="outline" class="border-white/20 bg-white/10 text-white">{{ detail?.tenant.status || 'active' }}</Badge>
-            <Badge variant="outline" class="border-white/20 bg-white/10 text-white">{{ tenantStatusLabel }}</Badge>
-            <Badge variant="outline" class="border-white/20 bg-white/10 text-white">
+          <div class="mt-2.5 flex flex-wrap items-center gap-1.5">
+            <Badge variant="outline" class="border-[#c9ddd0] bg-white/76 text-[#355344]">{{ detail?.tenant.status || 'active' }}</Badge>
+            <Badge variant="outline" class="border-[#c9ddd0] bg-white/76 text-[#355344]">{{ tenantStatusLabel }}</Badge>
+            <Badge variant="outline" class="border-[#c9ddd0] bg-white/76 text-[#355344]">
               {{ detail?.tenant.can_use_ai ? t('tenantDetail.aiReady') : t('tenantDetail.aiPending') }}
             </Badge>
           </div>
         </div>
 
-        <div class="rounded-[28px] border border-white/10 bg-white/10 px-5 py-4 backdrop-blur">
-          <p class="text-xs font-black uppercase tracking-[0.26em] text-slate-400">{{ t('tenantDetail.panelLabel') }}</p>
-          <p class="mt-2 text-sm leading-7 text-slate-200">
+        <div class="rounded-[16px] border border-[#d6e2db] bg-white/90 px-3 py-2 shadow-sm backdrop-blur xl:max-w-[17rem]">
+          <p class="text-[10px] font-black uppercase tracking-[0.22em] text-[#7b9688]">{{ t('tenantDetail.panelLabel') }}</p>
+          <p class="mt-1 text-[13px] leading-5 text-[#557061]">
             {{ detail?.latest_activation_code
               ? t('tenantDetail.latestCode', { code: detail.latest_activation_code.code })
               : t('tenantDetail.noCode') }}
@@ -164,15 +164,15 @@ watch(() => route.params.tenantId, fetchTenantDetail)
         </div>
       </div>
 
-      <div class="mt-6 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+      <div class="mt-3.5 grid gap-2 md:grid-cols-2 xl:grid-cols-4">
         <article
           v-for="item in headlineStats"
           :key="item.label"
-          class="rounded-[24px] border border-white/10 bg-white/10 p-4 backdrop-blur"
+          class="rounded-[15px] border border-[#d7e2db] bg-white/92 px-3 py-2.5 shadow-sm backdrop-blur"
         >
-          <p class="text-[11px] font-black uppercase tracking-[0.22em] text-slate-400">{{ item.label }}</p>
-          <p class="mt-3 text-3xl font-black tracking-tight text-white">{{ item.value }}</p>
-          <p class="mt-2 text-sm leading-6 text-slate-300">{{ item.hint }}</p>
+          <p class="text-[10px] font-black uppercase tracking-[0.18em] text-[#7d9789]">{{ item.label }}</p>
+          <p class="mt-1 text-[15px] font-black tracking-tight text-[#203228]">{{ item.value }}</p>
+          <p class="mt-0.5 text-[12px] leading-5 text-[#5f796b]">{{ item.hint }}</p>
         </article>
       </div>
     </section>

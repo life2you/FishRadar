@@ -4,7 +4,7 @@ from fastapi.testclient import TestClient
 from src.api import dependencies as deps
 from src.api.routes import dashboard
 from src.domain.models.task import TaskCreate
-from src.infrastructure.persistence.sqlite_task_repository import SqliteTaskRepository
+from src.infrastructure.persistence.mysql_task_repository import MySQLTaskRepository
 from src.services.result_storage_service import save_result_record
 from src.services.task_service import TaskService
 
@@ -12,7 +12,7 @@ from src.services.task_service import TaskService
 def test_dashboard_summary_aggregates_tasks_and_results(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
 
-    repository = SqliteTaskRepository(
+    repository = MySQLTaskRepository(
         legacy_config_file=None,
     )
     task_service = TaskService(repository)

@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { BellRing, Bot, ServerCog } from 'lucide-vue-next'
 import { useSettings } from '@/composables/useSettings'
-import type { NotificationSettingsUpdate, NotificationTestResponse } from '@/api/settings'
+import type { AiAccountItem, AiAccountPayload, TenantNotificationChannel } from '@/api/settings'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -14,25 +14,40 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { toast } from '@/components/ui/toast'
 import { getPromptContent, listPrompts, updatePrompt } from '@/api/prompts'
-import NotificationSettingsPanel from '@/components/settings/NotificationSettingsPanel.vue'
 import RotationSettingsPanel from '@/components/settings/RotationSettingsPanel.vue'
+import AdminTenantNotificationChannelsPanel from '@/components/admin/AdminTenantNotificationChannelsPanel.vue'
 const { t } = useI18n()
 
+type AiAccountFormState = {
+  name: string
+  api_key: string
+  base_url: string
+  model_name: string
+  supports_image: boolean
+  supports_text: boolean
+  enabled: boolean
+  priority: number
+  notes: string
+}
+
 const {
-  notificationSettings,
-  aiSettings,
+  tenantNotificationChannels,
+  aiAccounts,
   rotationSettings,
   systemStatus,
   isLoading,
   isSaving,
   isReady,
   error,
+  fetchAll,
   refreshStatus,
-  saveNotificationSettings,
-  testNotification,
-  saveAiSettings,
+  saveTenantNotificationChannels,
+  createAiAccount,
+  updateAiAccount,
+  deleteAiAccount,
+  testAiAccount,
+  testExistingAiAccount,
   saveRotationSettings,
-  testAiConnection
 } = useSettings()
 
 const activeTab = ref('ai')
@@ -45,21 +60,34 @@ const promptContent = ref('')
 const isPromptLoading = ref(false)
 const isPromptSaving = ref(false)
 const promptError = ref<string | null>(null)
-const configuredChannelsCount = computed(() => systemStatus.value?.configured_notification_channels?.length ?? 0)
+const editingAiAccountId = ref<number | null>(null)
+const aiAccountForm = ref<AiAccountFormState>({
+  name: '',
+  api_key: '',
+  base_url: '',
+  model_name: '',
+  supports_image: true,
+  supports_text: true,
+  enabled: true,
+  priority: 100,
+  notes: '',
+})
+const aiAccountFormTitle = computed(() => editingAiAccountId.value ? '编辑 AI 账号' : '新增 AI 账号')
+const activeAiAccountCount = computed(() => aiAccounts.value.filter((item) => item.enabled && !item.is_fallback).length)
 const settingsHeroCards = computed(() => [
   {
     icon: Bot,
     label: t('settings.hero.cards.ai'),
-    value: systemStatus.value?.ai_configured ? t('common.enabled') : t('common.disabled'),
-    detail: aiSettings.value.OPENAI_MODEL_NAME || 'OPENAI_MODEL_NAME',
+    value: activeAiAccountCount.value ? t('common.enabled') : t('common.disabled'),
+    detail: activeAiAccountCount.value ? `已配置 ${activeAiAccountCount.value} 个 AI 账号` : '尚未配置 AI 账号',
   },
   {
     icon: BellRing,
     label: t('settings.hero.cards.notifications'),
-    value: configuredChannelsCount.value ? String(configuredChannelsCount.value) : t('common.empty'),
-    detail: configuredChannelsCount.value
-      ? t('settings.hero.notificationsConfigured', { count: configuredChannelsCount.value })
-      : t('settings.hero.notificationsEmpty'),
+    value: tenantNotificationChannels.value.length ? String(tenantNotificationChannels.value.length) : t('common.empty'),
+    detail: tenantNotificationChannels.value.length
+      ? t('settings.tenantNotifications.summary', { count: tenantNotificationChannels.value.length })
+      : t('settings.tenantNotifications.none'),
   },
   {
     icon: ServerCog,
@@ -68,6 +96,49 @@ const settingsHeroCards = computed(() => [
     detail: systemStatus.value?.scraper_running ? t('common.running') : t('common.idle'),
   },
 ])
+const aiAccountList = computed(() => aiAccounts.value.filter((item) => !item.is_fallback))
+
+function formatDateTime(value?: string | null) {
+  if (!value) {
+    return '未记录'
+  }
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value
+  }
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+function getAiUsageLabel(item: AiAccountItem) {
+  if (item.supports_image && item.supports_text) {
+    return '图文通用'
+  }
+  if (item.supports_image) {
+    return '仅图片分析'
+  }
+  if (item.supports_text) {
+    return '仅文本分析'
+  }
+  return '未配置能力'
+}
+
+function getAiUsageTone(item: AiAccountItem) {
+  if (item.supports_image && item.supports_text) {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  }
+  if (item.supports_image) {
+    return 'border-violet-200 bg-violet-50 text-violet-700'
+  }
+  if (item.supports_text) {
+    return 'border-sky-200 bg-sky-50 text-sky-700'
+  }
+  return 'border-slate-200 bg-slate-50 text-slate-500'
+}
 
 function notifySuccess(title: string, description?: string) {
   toast({ title, description })
@@ -77,34 +148,130 @@ function notifyError(title: string, description?: string) {
   toast({ title, description, variant: 'destructive' })
 }
 
-async function handleSaveNotifications(payload: NotificationSettingsUpdate) {
+async function handleSaveTenantNotificationChannels(channels: TenantNotificationChannel[]) {
   try {
-    await saveNotificationSettings(payload)
-    notifySuccess(t('settings.notifications.saved'))
+    await saveTenantNotificationChannels(channels)
+    notifySuccess(t('settings.tenantNotifications.saved'))
   } catch (e) {
-    notifyError(t('settings.notifications.saveFailed'), (e as Error).message)
+    notifyError(t('settings.tenantNotifications.saveFailed'), (e as Error).message)
   }
 }
 
-async function handleTestNotification(payload: {
-  channel?: string
-  settings: NotificationSettingsUpdate
-}): Promise<NotificationTestResponse> {
-  try {
-    const result = await testNotification(payload)
-    return result
-  } catch (e) {
-    notifyError(t('settings.notifications.testFailed'), (e as Error).message)
-    throw e
+function resetAiAccountForm() {
+  editingAiAccountId.value = null
+  aiAccountForm.value = {
+    name: '',
+    api_key: '',
+    base_url: '',
+    model_name: '',
+    supports_image: true,
+    supports_text: true,
+    enabled: true,
+    priority: 100,
+    notes: '',
   }
 }
 
-async function handleSaveAi() {
+function handleEditAiAccount(item: AiAccountItem) {
+  if (item.is_fallback) {
+    return
+  }
+  editingAiAccountId.value = item.id
+  aiAccountForm.value = {
+    name: item.name,
+    api_key: '',
+    base_url: item.base_url,
+    model_name: item.model_name,
+    supports_image: item.supports_image,
+    supports_text: item.supports_text,
+    enabled: item.enabled,
+    priority: item.priority,
+    notes: item.notes || '',
+  }
+}
+
+async function handleSaveAiAccount() {
   try {
-    await saveAiSettings()
-    notifySuccess(t('settings.ai.saved'))
+    const payload: AiAccountPayload = {
+      ...aiAccountForm.value,
+      name: aiAccountForm.value.name.trim(),
+      api_key: (aiAccountForm.value.api_key || '').trim() || undefined,
+      base_url: aiAccountForm.value.base_url.trim(),
+      model_name: aiAccountForm.value.model_name.trim(),
+      notes: (aiAccountForm.value.notes || '').trim() || undefined,
+      priority: Number(aiAccountForm.value.priority || 100),
+    }
+    if (!payload.name || !payload.base_url || !payload.model_name) {
+      notifyError('AI账号信息不完整', '请填写名称、接口地址和模型名称。')
+      return
+    }
+    if (!payload.supports_image && !payload.supports_text) {
+      notifyError('AI账号能力未开启', '至少需要开启图片分析或文本分析中的一种。')
+      return
+    }
+    if (editingAiAccountId.value) {
+      await updateAiAccount(editingAiAccountId.value, payload)
+      notifySuccess('AI账号已更新')
+    } else {
+      await createAiAccount(payload)
+      notifySuccess('AI账号已创建')
+    }
+    resetAiAccountForm()
   } catch (e) {
-    notifyError(t('settings.ai.saveFailed'), (e as Error).message)
+    notifyError('保存AI账号失败', (e as Error).message)
+  }
+}
+
+async function handleDeleteAiAccount(item: AiAccountItem) {
+  if (item.is_fallback) {
+    return
+  }
+  try {
+    await deleteAiAccount(item.id)
+    notifySuccess('AI账号已删除')
+    if (editingAiAccountId.value === item.id) {
+      resetAiAccountForm()
+    }
+  } catch (e) {
+    notifyError('删除AI账号失败', (e as Error).message)
+  }
+}
+
+async function handleTestAiAccount() {
+  try {
+    const payload = {
+      api_key: (aiAccountForm.value.api_key || '').trim() || undefined,
+      base_url: aiAccountForm.value.base_url.trim(),
+      model_name: aiAccountForm.value.model_name.trim(),
+    }
+    if (!payload.base_url || !payload.model_name) {
+      notifyError('AI账号信息不完整', '测试前请先填写接口地址和模型名称。')
+      return
+    }
+    const res = await testAiAccount(payload)
+    if (res.success) {
+      notifySuccess('AI账号测试成功', res.message)
+    } else {
+      notifyError('AI账号测试失败', res.message)
+    }
+  } catch (e) {
+    notifyError('AI账号测试失败', (e as Error).message)
+  }
+}
+
+async function handleTestExistingAiAccount(item: AiAccountItem) {
+  if (item.is_fallback) {
+    return
+  }
+  try {
+    const res = await testExistingAiAccount(item.id)
+    if (res.success) {
+      notifySuccess('AI账号测试成功', res.message)
+    } else {
+      notifyError('AI账号测试失败', res.message)
+    }
+  } catch (e) {
+    notifyError('AI账号测试失败', (e as Error).message)
   }
 }
 
@@ -114,15 +281,6 @@ async function handleSaveRotation() {
     notifySuccess(t('settings.rotation.saved'))
   } catch (e) {
     notifyError(t('settings.rotation.saveFailed'), (e as Error).message)
-  }
-}
-
-async function handleTestAi() {
-  try {
-    const res = await testAiConnection()
-    notifySuccess(t('settings.ai.testSuccess'), res.message)
-  } catch (e) {
-    notifyError(t('settings.ai.testFailed'), (e as Error).message)
   }
 }
 
@@ -200,33 +358,43 @@ watch(selectedPrompt, async (value) => {
     isPromptLoading.value = false
   }
 })
+
+onMounted(() => {
+  if (!isLoading.value) {
+    fetchAll()
+  }
+})
 </script>
 
 <template>
   <div class="space-y-6">
-    <section class="overflow-hidden rounded-[32px] border border-slate-200/80 bg-[linear-gradient(135deg,#09101b_0%,#16263c_44%,#dce8f2_220%)] px-6 py-7 text-white shadow-[0_28px_90px_rgba(15,23,42,0.18)] md:px-8">
-      <div class="flex flex-col gap-6 xl:flex-row xl:items-end xl:justify-between">
-        <div class="max-w-3xl">
-          <p class="text-xs font-black uppercase tracking-[0.32em] text-slate-300">CatchYu Console</p>
-          <h1 class="mt-3 text-3xl font-black tracking-tight text-white md:text-4xl">{{ t('settings.title') }}</h1>
-          <p class="mt-3 max-w-2xl text-sm leading-7 text-slate-300 md:text-base">{{ t('settings.description') }}</p>
+    <section class="rounded-[20px] border border-[#d7e2db] bg-[linear-gradient(135deg,#f7fbf7_0%,#eef5f0_100%)] px-4 py-4 text-[#243329] shadow-[0_10px_24px_rgba(78,99,88,0.06)]">
+      <div class="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div class="max-w-[42rem]">
+          <p class="text-[10px] font-black uppercase tracking-[0.24em] text-[#74887c]">CatchYu Console</p>
+          <div class="mt-1.5 flex flex-wrap items-center gap-3">
+            <h1 class="text-[1.45rem] font-black tracking-tight text-[#243329]">{{ t('settings.title') }}</h1>
+            <span class="rounded-full border border-[#d7e2db] bg-white/90 px-2.5 py-1 text-[11px] font-medium text-[#5d7064]">
+              {{ t('settings.hero.panelLabel') }}
+            </span>
+          </div>
+          <p class="mt-1 text-[13px] leading-5 text-[#627267]">{{ t('settings.description') }}</p>
         </div>
-        <div class="rounded-[28px] border border-white/10 bg-white/10 px-5 py-4 backdrop-blur xl:max-w-sm">
-          <p class="text-xs font-black uppercase tracking-[0.24em] text-slate-400">{{ t('settings.hero.panelLabel') }}</p>
-          <p class="mt-2 text-sm leading-7 text-slate-200">{{ t('settings.hero.panelDescription') }}</p>
-        </div>
+        <div class="text-[12px] leading-5 text-[#66766b] lg:max-w-[18rem]">{{ t('settings.hero.panelDescription') }}</div>
       </div>
 
-      <div class="mt-6 grid gap-3 md:grid-cols-3">
+      <div class="mt-3 flex flex-wrap gap-2">
         <article
           v-for="card in settingsHeroCards"
           :key="card.label"
-          class="rounded-[24px] border border-white/10 bg-white/10 p-4 backdrop-blur"
+          class="flex min-w-[190px] flex-1 items-start gap-3 rounded-[14px] border border-[#d7e2db] bg-white/94 px-3 py-2.5 shadow-sm"
         >
-          <component :is="card.icon" class="h-5 w-5 text-[#a6d0ff]" />
-          <p class="mt-4 text-xs font-black uppercase tracking-[0.22em] text-slate-400">{{ card.label }}</p>
-          <p class="mt-3 text-lg font-black text-white">{{ card.value }}</p>
-          <p class="mt-2 text-sm leading-6 text-slate-300">{{ card.detail }}</p>
+          <component :is="card.icon" class="mt-0.5 h-4.5 w-4.5 shrink-0 text-[#74a08a]" />
+          <div class="min-w-0">
+            <p class="text-[10px] font-black uppercase tracking-[0.18em] text-[#88a094]">{{ card.label }}</p>
+            <p class="mt-0.5 text-[14px] font-black text-[#243329]">{{ card.value }}</p>
+            <p class="mt-0.5 text-[12px] leading-5 text-[#66766b]">{{ card.detail }}</p>
+          </div>
         </article>
       </div>
     </section>
@@ -246,44 +414,161 @@ watch(selectedPrompt, async (value) => {
 
       <!-- AI Tab -->
       <TabsContent value="ai">
-        <Card>
-          <CardHeader>
-            <CardTitle>{{ t('settings.ai.title') }}</CardTitle>
-            <CardDescription>{{ t('settings.ai.description') }}</CardDescription>
-          </CardHeader>
-          <CardContent v-if="isReady" class="space-y-4">
-            <div class="grid gap-2">
-              <Label>API Base URL</Label>
-              <Input v-model="aiSettings.OPENAI_BASE_URL" placeholder="https://api.openai.com/v1" />
-            </div>
-            <div class="grid gap-2">
-              <Label>API Key</Label>
-              <Input
-                v-model="aiSettings.OPENAI_API_KEY"
-                type="password"
-                :placeholder="t('settings.ai.keyPlaceholder')"
-              />
-              <p class="text-xs text-gray-500">
-                {{ systemStatus?.env_file.openai_api_key_set ? t('settings.ai.keyConfigured') : t('settings.ai.keyMissing') }}
-              </p>
-            </div>
-            <div class="grid gap-2">
-              <Label>{{ t('settings.ai.modelName') }}</Label>
-              <Input v-model="aiSettings.OPENAI_MODEL_NAME" placeholder="gpt-3.5-turbo" />
-            </div>
-            <div class="grid gap-2">
-              <Label>{{ t('settings.ai.proxy') }}</Label>
-              <Input v-model="aiSettings.PROXY_URL" placeholder="http://127.0.0.1:7890" />
-            </div>
-          </CardContent>
-          <CardContent v-else class="py-8 text-sm text-gray-500">
-            {{ t('settings.ai.loading') }}
-          </CardContent>
-          <CardFooter v-if="isReady" class="flex gap-2">
-            <Button variant="outline" @click="handleTestAi" :disabled="isSaving">{{ t('settings.ai.testConnection') }}</Button>
-            <Button @click="handleSaveAi" :disabled="isSaving">{{ t('settings.ai.save') }}</Button>
-          </CardFooter>
-        </Card>
+        <div class="space-y-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>AI账号池</CardTitle>
+              <CardDescription>为文本分析和图片分析维护多个 AI 账号，系统会按任务能力自动选择可用账号。</CardDescription>
+            </CardHeader>
+            <CardContent class="space-y-5">
+              <p v-if="!isReady || isLoading" class="text-sm text-slate-500">正在加载 AI 配置...</p>
+              <div class="grid gap-3 md:grid-cols-3">
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p class="text-xs font-semibold text-slate-500">已启用账号</p>
+                  <p class="mt-1 text-2xl font-black text-slate-900">{{ activeAiAccountCount }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p class="text-xs font-semibold text-slate-500">图片分析账号</p>
+                  <p class="mt-1 text-2xl font-black text-slate-900">{{ aiAccounts.filter((item) => item.enabled && item.supports_image && !item.is_fallback).length }}</p>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                  <p class="text-xs font-semibold text-slate-500">文本分析账号</p>
+                  <p class="mt-1 text-2xl font-black text-slate-900">{{ aiAccounts.filter((item) => item.enabled && item.supports_text && !item.is_fallback).length }}</p>
+                </div>
+              </div>
+
+              <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+                <div class="space-y-3">
+                  <div
+                    v-if="!aiAccountList.length"
+                    class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-6 text-sm text-slate-500"
+                  >
+                    还没有自定义 AI 账号，建议先创建一个可用账号。
+                  </div>
+                  <article
+                    v-for="item in aiAccountList"
+                    :key="`${item.id}-${item.name}`"
+                    class="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm"
+                  >
+                    <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                      <div class="min-w-0">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <h3 class="text-base font-black text-slate-900">{{ item.name }}</h3>
+                          <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="item.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-500'">
+                            {{ item.enabled ? '启用中' : '已停用' }}
+                          </span>
+                          <span v-if="item.is_fallback" class="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
+                            环境回退
+                          </span>
+                        </div>
+                        <p class="mt-1 break-all text-sm text-slate-600">{{ item.base_url }}</p>
+                        <p class="mt-1 text-sm text-slate-500">{{ item.model_name }}</p>
+                        <div class="mt-3 flex flex-wrap gap-2">
+                          <span class="rounded-full border px-2.5 py-1 text-xs font-semibold" :class="getAiUsageTone(item)">{{ getAiUsageLabel(item) }}</span>
+                          <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">优先级 {{ item.priority }}</span>
+                          <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-600">{{ item.api_key_set ? '已配置密钥' : '无密钥' }}</span>
+                        </div>
+                        <div class="mt-3 grid gap-2 text-xs text-slate-500 sm:grid-cols-2">
+                          <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p class="font-semibold text-slate-600">最近更新</p>
+                            <p class="mt-1 text-sm text-slate-800">{{ formatDateTime(item.updated_at || item.created_at) }}</p>
+                          </div>
+                          <div class="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                            <p class="font-semibold text-slate-600">最近测试</p>
+                            <p
+                              class="mt-1 text-sm font-semibold"
+                              :class="item.last_test_status === 'success' ? 'text-emerald-700' : item.last_test_status === 'failed' ? 'text-rose-700' : 'text-slate-700'"
+                            >
+                              {{
+                                item.last_test_status === 'success'
+                                  ? '已通过'
+                                  : item.last_test_status === 'failed'
+                                    ? '失败'
+                                    : '未测试'
+                              }}
+                            </p>
+                            <p class="mt-1 line-clamp-2 text-xs text-slate-500">
+                              {{
+                                item.last_tested_at
+                                  ? `${formatDateTime(item.last_tested_at)} · ${item.last_test_message || '最近一次测试已完成'}`
+                                  : '建议创建后先测试一次连接。'
+                              }}
+                            </p>
+                          </div>
+                        </div>
+                        <p v-if="item.notes" class="mt-3 text-sm text-slate-500">{{ item.notes }}</p>
+                      </div>
+                      <div v-if="!item.is_fallback" class="flex shrink-0 flex-wrap gap-2">
+                        <Button variant="outline" size="sm" @click="handleTestExistingAiAccount(item)">测试</Button>
+                        <Button variant="outline" size="sm" @click="handleEditAiAccount(item)">编辑</Button>
+                        <Button variant="outline" size="sm" class="text-rose-600 hover:text-rose-700" @click="handleDeleteAiAccount(item)">删除</Button>
+                      </div>
+                    </div>
+                  </article>
+                </div>
+
+                <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                  <div class="flex items-center justify-between gap-3">
+                    <div>
+                      <h3 class="text-lg font-black text-slate-900">{{ aiAccountFormTitle }}</h3>
+                      <p class="mt-1 text-sm text-slate-500">为不同任务能力准备专用 AI 账号。</p>
+                    </div>
+                    <Button variant="outline" size="sm" @click="resetAiAccountForm">重置</Button>
+                  </div>
+
+                  <div class="mt-5 space-y-4">
+                    <div class="grid gap-2">
+                      <Label>账号名称</Label>
+                      <Input v-model="aiAccountForm.name" placeholder="例如：图片分析主账号" />
+                    </div>
+                    <div class="grid gap-2">
+                      <Label>API Base URL</Label>
+                      <Input v-model="aiAccountForm.base_url" placeholder="https://api.openai.com/v1" />
+                    </div>
+                    <div class="grid gap-2">
+                      <Label>API Key</Label>
+                      <Input v-model="aiAccountForm.api_key" type="password" :placeholder="editingAiAccountId ? '留空则保持原密钥不变' : '输入新的 API Key'" />
+                    </div>
+                    <div class="grid gap-2">
+                      <Label>模型名称</Label>
+                      <Input v-model="aiAccountForm.model_name" placeholder="gpt-4o-mini / Qwen2.5-VL-72B-Instruct" />
+                    </div>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                      <label class="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700">
+                        <input v-model="aiAccountForm.supports_text" type="checkbox" class="h-4 w-4" />
+                        支持文本分析
+                      </label>
+                      <label class="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700">
+                        <input v-model="aiAccountForm.supports_image" type="checkbox" class="h-4 w-4" />
+                        支持图片分析
+                      </label>
+                    </div>
+                    <div class="grid gap-4 sm:grid-cols-2">
+                      <label class="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700">
+                        <input v-model="aiAccountForm.enabled" type="checkbox" class="h-4 w-4" />
+                        启用该账号
+                      </label>
+                      <div class="grid gap-2">
+                        <Label>优先级</Label>
+                        <Input v-model.number="aiAccountForm.priority" type="number" min="1" />
+                      </div>
+                    </div>
+                    <div class="grid gap-2">
+                      <Label>备注</Label>
+                      <Textarea v-model="aiAccountForm.notes" placeholder="例如：只给图片任务使用，额度较高。" />
+                    </div>
+                  </div>
+
+                  <div class="mt-5 flex flex-wrap gap-2">
+                    <Button variant="outline" @click="handleTestAiAccount" :disabled="isSaving">测试连接</Button>
+                    <Button @click="handleSaveAiAccount" :disabled="isSaving">{{ editingAiAccountId ? '保存修改' : '创建账号' }}</Button>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+        </div>
       </TabsContent>
 
       <!-- Rotation Tab -->
@@ -298,12 +583,11 @@ watch(selectedPrompt, async (value) => {
 
       <!-- Notifications Tab -->
       <TabsContent value="notifications">
-        <NotificationSettingsPanel
-          :settings="notificationSettings"
+        <AdminTenantNotificationChannelsPanel
+          :channels="tenantNotificationChannels"
           :is-ready="isReady"
           :is-saving="isSaving"
-          :save-settings="handleSaveNotifications"
-          :test-settings="handleTestNotification"
+          @save="handleSaveTenantNotificationChannels"
         />
       </TabsContent>
 
@@ -351,15 +635,15 @@ watch(selectedPrompt, async (value) => {
                         </div>
                     </div>
                     
-                    <div class="p-3 border rounded-lg" :class="systemStatus.configured_notification_channels?.length ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'">
+                    <div class="p-3 border rounded-lg" :class="tenantNotificationChannels.length ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'">
                          <div class="flex justify-between items-center">
                             <span class="font-medium text-sm">{{ t('settings.status.channels') }}</span>
-                             <span class="text-xs font-bold" :class="systemStatus.configured_notification_channels?.length ? 'text-green-700' : 'text-gray-500'">
-                                {{ systemStatus.configured_notification_channels?.length ? t('common.active') : t('common.inactive') }}
+                             <span class="text-xs font-bold" :class="tenantNotificationChannels.length ? 'text-green-700' : 'text-gray-500'">
+                                {{ tenantNotificationChannels.length ? t('common.active') : t('common.inactive') }}
                             </span>
                         </div>
                          <div class="text-xs text-gray-500 mt-1">
-                            {{ systemStatus.configured_notification_channels?.join(', ') || t('settings.status.none') }}
+                            {{ tenantNotificationChannels.join(', ') || t('settings.status.none') }}
                         </div>
                     </div>
                 </div>

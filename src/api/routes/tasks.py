@@ -30,6 +30,10 @@ from src.domain.models.task import TaskCreate, TaskUpdate, TaskGenerateRequest
 from src.prompt_utils import generate_criteria
 from src.utils import resolve_task_log_path
 from src.services.account_strategy_service import normalize_account_strategy
+from src.services.task_prompt_service import (
+    build_criteria_generation_input,
+    build_task_prompt_payload,
+)
 from src.infrastructure.persistence.storage_names import build_result_filename
 from src.services.price_history_service import delete_price_snapshots
 from src.services.result_storage_service import GLOBAL_TENANT_SCOPE
@@ -242,7 +246,11 @@ async def update_task(
                 print(f"目标文件路径: {output_filename}")
                 print("开始调用 AI 生成新的分析标准...")
                 generated_criteria = await generate_criteria(
-                    user_description=description_for_ai,
+                    user_description=build_criteria_generation_input(
+                        task_name=existing_task.task_name,
+                        keyword=existing_task.keyword,
+                        description=description_for_ai,
+                    ),
                     reference_file_path="prompts/macbook_criteria.txt"
                 )
                 if not generated_criteria or len(generated_criteria.strip()) == 0:
@@ -253,7 +261,18 @@ async def update_task(
                 async with aiofiles.open(output_filename, 'w', encoding='utf-8') as f:
                     await f.write(generated_criteria)
                 print(f"新的分析标准已保存")
-                task_update.ai_prompt_criteria_file = output_filename
+                prompt_payload = build_task_prompt_payload(
+                    base_prompt_file=(
+                        existing_task.ai_prompt_base_file or "prompts/base_prompt.txt"
+                    ),
+                    criteria_file=output_filename,
+                    criteria_text=generated_criteria,
+                )
+                task_update.ai_prompt_base_file = prompt_payload["ai_prompt_base_file"]
+                task_update.ai_prompt_criteria_file = prompt_payload["ai_prompt_criteria_file"]
+                task_update.ai_prompt_base_text = prompt_payload["ai_prompt_base_text"]
+                task_update.ai_prompt_criteria_text = prompt_payload["ai_prompt_criteria_text"]
+                task_update.ai_prompt_text = prompt_payload["ai_prompt_text"]
                 print(f"已更新 ai_prompt_criteria_file 字段为: {output_filename}")
             except HTTPException:
                 raise

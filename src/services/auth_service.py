@@ -11,7 +11,7 @@ from typing import Optional
 
 from src.domain.models.auth import AuthenticatedUser
 from src.infrastructure.config.settings import settings as app_settings
-from src.infrastructure.persistence.sqlite_connection import sqlite_connection
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 from src.infrastructure.security.passwords import hash_password, verify_password
 
 
@@ -129,7 +129,7 @@ def _row_to_authenticated_user(row, *, session_token: str | None = None) -> Auth
 
 
 def bootstrap_default_auth_data() -> None:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         tenant_row = conn.execute(
             "SELECT id FROM tenants WHERE slug = ? LIMIT 1",
             (DEFAULT_ADMIN_TENANT_SLUG,),
@@ -227,7 +227,7 @@ def _build_user_context(conn, user_row, *, session_token: str | None = None) -> 
 
 
 def authenticate_credentials_sync(username: str, password: str) -> Optional[AuthenticatedUser]:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         user_row = conn.execute(
             """
             SELECT id, username, password_hash, role, status, display_name
@@ -272,7 +272,7 @@ def register_tenant_user_sync(
     if not normalized_tenant_name:
         raise ValueError("租户名称不能为空")
 
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         existing = conn.execute(
             "SELECT id FROM users WHERE username = ? LIMIT 1",
             (normalized_username,),
@@ -341,7 +341,7 @@ async def register_tenant_user(
 
 def create_session_sync(user: AuthenticatedUser) -> str:
     token = secrets.token_urlsafe(32)
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         conn.execute(
             """
             INSERT OR REPLACE INTO auth_sessions (
@@ -365,7 +365,7 @@ async def create_session(user: AuthenticatedUser) -> str:
 
 
 def get_user_by_session_sync(session_token: str) -> Optional[AuthenticatedUser]:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         row = conn.execute(
             """
             SELECT s.session_token, s.expires_at, u.id, u.username, u.role, u.status, u.display_name
@@ -396,7 +396,7 @@ async def get_user_by_session(session_token: str) -> Optional[AuthenticatedUser]
 
 
 def delete_session_sync(session_token: str) -> None:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         conn.execute("DELETE FROM auth_sessions WHERE session_token = ?", (session_token,))
         conn.commit()
 
@@ -438,7 +438,7 @@ def _serialize_tenant_row(row) -> dict:
 
 
 def list_tenants_sync() -> list[dict]:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         rows = conn.execute(
             """
             SELECT
@@ -493,7 +493,7 @@ def update_tenant_access_sync(
     ):
         raise ValueError("没有可更新的租户字段")
 
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         row = conn.execute(
             """
             SELECT id, slug, activation_required, activated_at, access_expires_at
@@ -602,7 +602,7 @@ async def update_tenant_access(
 
 
 def get_tenant_detail_sync(tenant_id: int) -> dict:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         tenant_row = conn.execute(
             """
             SELECT
@@ -733,7 +733,7 @@ def create_activation_codes_sync(
     normalized_note = str(note or "").strip() or None
     created_at = _now_iso()
     created_codes: list[dict] = []
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         for _ in range(normalized_quantity):
             code = _generate_activation_code()
             while conn.execute(
@@ -784,7 +784,7 @@ async def create_activation_codes(
 
 
 def list_activation_codes_sync() -> list[dict]:
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         rows = conn.execute(
             """
             SELECT
@@ -835,7 +835,7 @@ def redeem_activation_code_sync(code: str, current_user: AuthenticatedUser) -> A
     if not normalized_code:
         raise ValueError("卡密不能为空")
 
-    with sqlite_connection() as conn:
+    with mysql_connection() as conn:
         code_row = conn.execute(
             """
             SELECT id, code, status, redeemed_by_tenant_id, duration_minutes

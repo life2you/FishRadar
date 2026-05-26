@@ -18,6 +18,7 @@ import {
   Radar,
   Clock3,
   ScrollText,
+  BellRing,
 } from 'lucide-vue-next'
 import Badge from '@/components/ui/badge/Badge.vue'
 import { useMobileNav } from '@/composables/useMobileNav'
@@ -83,6 +84,12 @@ const tenantNavItems = computed(() => {
       label: t('tenantPortal.nav.results'),
       icon: Layers3,
     },
+    {
+      to: '/notifications',
+      name: 'Notifications',
+      label: t('tenantPortal.nav.notifications'),
+      icon: BellRing,
+    },
   ]
 })
 const currentRouteName = computed(() => typeof route.name === 'string' ? route.name : '')
@@ -111,7 +118,7 @@ function handleLogout() {
 <template>
   <header
     v-if="isTenant"
-    class="sticky top-0 z-[100] border-b border-[#eadfce]/90 bg-[linear-gradient(180deg,rgba(252,247,239,0.96)_0%,rgba(249,243,233,0.94)_100%)] backdrop-blur-xl"
+    class="sticky top-0 z-[100] border-b border-[#dce9de]/90 bg-[linear-gradient(180deg,rgba(251,249,242,0.96)_0%,rgba(244,248,241,0.95)_52%,rgba(239,245,244,0.94)_100%)] backdrop-blur-xl"
   >
     <div class="mx-auto flex max-w-[1320px] flex-col gap-5 px-4 py-4 md:px-8">
       <div class="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
@@ -120,14 +127,14 @@ function handleLogout() {
           class="flex items-center gap-3 rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
           :aria-label="t('header.goHome')"
         >
-          <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#221710_0%,#6f4124_55%,#c48c3b_100%)] shadow-[0_18px_42px_rgba(86,52,28,0.26)]">
+          <div class="flex h-11 w-11 items-center justify-center rounded-2xl bg-[linear-gradient(135deg,#2a5d47_0%,#5c9a7b_55%,#8cc9bc_100%)] shadow-[0_18px_42px_rgba(76,120,97,0.24)]">
             <Radar class="h-5 w-5 text-white" />
           </div>
           <div>
-            <p class="text-xs font-black uppercase tracking-[0.3em] text-[#927454]">
+            <p class="text-xs font-black uppercase tracking-[0.3em] text-[#739180]">
               CatchYu
             </p>
-            <h1 class="text-lg font-black tracking-tight text-[#241a12]">
+            <h1 class="text-lg font-black tracking-tight text-[#203228]">
               {{ tenantTitle }}
             </h1>
           </div>
@@ -138,8 +145,8 @@ function handleLogout() {
             v-if="tenantExpiryLabel"
             class="rounded-full border px-3 py-1.5 text-xs shadow-sm"
             :class="isTenantExpirySoon
-              ? 'border-[#e8d8bb] bg-[#fff7e8] text-[#8b6232]'
-              : 'border-[#ece2d3] bg-white/72 text-[#7a6551]'"
+              ? 'border-[#dbe8c9] bg-[#f6fbe9] text-[#5f7a34]'
+              : 'border-[#dbe6dd] bg-white/72 text-[#5f7869]'"
           >
             <span class="inline-flex items-center gap-1.5">
               <Clock3 class="h-3.5 w-3.5" />
@@ -147,14 +154,14 @@ function handleLogout() {
               <span class="font-semibold">{{ tenantExpiryLabel }}</span>
             </span>
           </div>
-          <div class="rounded-full border border-[#e1d4c3] bg-white/80 px-3 py-1.5 text-xs text-[#6d5846] shadow-sm">
-            <span class="font-semibold text-[#927454]">{{ t('tenantPortal.signedInAs') }}</span>
-            <span class="ml-2 font-black text-[#2c2016]">{{ username }}</span>
+          <div class="rounded-full border border-[#dce7de] bg-white/80 px-3 py-1.5 text-xs text-[#5f7869] shadow-sm">
+            <span class="font-semibold text-[#739180]">{{ t('tenantPortal.signedInAs') }}</span>
+            <span class="ml-2 font-black text-[#203228]">{{ username }}</span>
           </div>
           <LocaleToggle />
           <Button
             variant="outline"
-            class="rounded-full border-[#dfd2c1] bg-white/80 text-[#473122] hover:bg-white"
+            class="rounded-full border-[#dce7de] bg-white/80 text-[#365444] hover:bg-white"
             @click="handleLogout"
           >
             <LogOut class="h-4 w-4" />
@@ -170,8 +177,8 @@ function handleLogout() {
           :to="item.to"
           class="group inline-flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-bold transition-all"
           :class="currentRouteName === item.name
-            ? 'border-[#221710] bg-[#221710] text-white shadow-[0_12px_30px_rgba(34,23,16,0.18)]'
-            : 'border-[#e1d6c8] bg-white/74 text-[#6a5744] hover:border-[#d1c0ab] hover:bg-white hover:text-[#241a12]'"
+            ? 'border-[#2b5b47] bg-[#2b5b47] text-white shadow-[0_12px_30px_rgba(43,91,71,0.18)]'
+            : 'border-[#dce7de] bg-white/74 text-[#5f7869] hover:border-[#c4d9cb] hover:bg-white hover:text-[#203228]'"
         >
           <component :is="item.icon" class="h-4 w-4" />
           {{ item.label }}
@@ -253,6 +260,15 @@ function handleLogout() {
            @click="goSettings"
          >
             <Settings2 class="w-5 h-5" />
+         </Button>
+         <Button
+           variant="ghost"
+           size="icon"
+           class="rounded-full text-slate-500 hover:bg-slate-900/10 hover:text-slate-900"
+           :aria-label="t('header.signOut')"
+           @click="handleLogout"
+         >
+            <LogOut class="w-5 h-5" />
          </Button>
       </div>
       

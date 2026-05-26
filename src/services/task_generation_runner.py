@@ -9,6 +9,10 @@ from src.domain.models.task import TaskCreate, TaskGenerateRequest
 from src.prompt_utils import generate_criteria
 from src.services.scheduler_service import SchedulerService
 from src.services.task_generation_service import TaskGenerationService
+from src.services.task_prompt_service import (
+    build_criteria_generation_input,
+    build_task_prompt_payload,
+)
 from src.services.task_service import TaskService
 
 def build_criteria_filename(keyword: str) -> str:
@@ -19,7 +23,18 @@ def build_criteria_filename(keyword: str) -> str:
     return f"prompts/{safe_keyword}_criteria.txt"
 
 
-def build_task_create(req: TaskGenerateRequest, criteria_file: str) -> TaskCreate:
+def build_task_create(
+    req: TaskGenerateRequest,
+    criteria_file: str,
+    *,
+    criteria_text: str = "",
+    base_prompt_file: str = "prompts/base_prompt.txt",
+) -> TaskCreate:
+    prompt_payload = build_task_prompt_payload(
+        base_prompt_file=base_prompt_file,
+        criteria_file=criteria_file,
+        criteria_text=criteria_text,
+    )
     return TaskCreate(
         tenant_id=req.tenant_id,
         task_name=req.task_name,
@@ -32,8 +47,11 @@ def build_task_create(req: TaskGenerateRequest, criteria_file: str) -> TaskCreat
         min_price=req.min_price,
         max_price=req.max_price,
         cron=req.cron,
-        ai_prompt_base_file="prompts/base_prompt.txt",
-        ai_prompt_criteria_file=criteria_file,
+        ai_prompt_base_file=prompt_payload["ai_prompt_base_file"],
+        ai_prompt_criteria_file=prompt_payload["ai_prompt_criteria_file"],
+        ai_prompt_base_text=prompt_payload["ai_prompt_base_text"],
+        ai_prompt_criteria_text=prompt_payload["ai_prompt_criteria_text"],
+        ai_prompt_text=prompt_payload["ai_prompt_text"],
         account_state_file=req.account_state_file,
         account_strategy=req.account_strategy,
         free_shipping=req.free_shipping,
@@ -91,7 +109,11 @@ async def run_ai_generation_job(
             await advance_job(generation_service, job_id, step_key, message)
 
         generated_criteria = await generate_criteria(
-            user_description=req.description or "",
+            user_description=build_criteria_generation_input(
+                task_name=req.task_name,
+                keyword=req.keyword,
+                description=req.description,
+            ),
             reference_file_path="prompts/macbook_criteria.txt",
             progress_callback=report_progress,
         )
@@ -110,7 +132,13 @@ async def run_ai_generation_job(
             "task",
             "分析标准已生成，正在创建任务记录。",
         )
-        task = await task_service.create_task(build_task_create(req, output_filename))
+        task = await task_service.create_task(
+            build_task_create(
+                req,
+                output_filename,
+                criteria_text=generated_criteria,
+            )
+        )
         await reload_scheduler(task_service, scheduler_service)
         await generation_service.complete(job_id, task, f"任务“{req.task_name}”创建完成。")
     except Exception as exc:

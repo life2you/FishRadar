@@ -1,8 +1,10 @@
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from src.api import dependencies as deps
 from src.api.routes import settings
+from src.domain.models.auth import AuthenticatedUser
 from src.infrastructure.config.env_manager import env_manager
 
 
@@ -11,7 +13,6 @@ _SETTINGS_ENV_KEYS = [
     "ACCOUNT_ROTATION_MODE",
     "ACCOUNT_ROTATION_RETRY_LIMIT",
     "ACCOUNT_BLACKLIST_TTL",
-    "ACCOUNT_STATE_DIR",
     "PROXY_ROTATION_ENABLED",
     "PROXY_ROTATION_MODE",
     "PROXY_POOL",
@@ -49,6 +50,19 @@ def _build_settings_client() -> TestClient:
     app = FastAPI()
     app.include_router(settings.router)
     app.dependency_overrides[deps.get_process_service] = _IdleProcessService
+    async def _admin_user():
+        return AuthenticatedUser(
+            user_id=1,
+            username="admin",
+            role="admin",
+            tenant_id=1,
+            tenant_name="Platform Admin",
+            tenant_status="active",
+            tenant_ai_enabled=True,
+            tenant_activation_required=False,
+            tenant_activated_at="2026-01-01T00:00:00",
+        )
+    app.dependency_overrides[deps.require_admin_user] = _admin_user
     return TestClient(app)
 
 
@@ -67,7 +81,6 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
                 "ACCOUNT_ROTATION_MODE=per_task",
                 "ACCOUNT_ROTATION_RETRY_LIMIT=2",
                 "ACCOUNT_BLACKLIST_TTL=300",
-                "ACCOUNT_STATE_DIR=state",
                 "PROXY_ROTATION_ENABLED=false",
                 "PROXY_ROTATION_MODE=per_task",
                 "PROXY_ROTATION_RETRY_LIMIT=2",
@@ -85,7 +98,6 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
     payload = response.json()
     assert payload["ACCOUNT_ROTATION_ENABLED"] is False
     assert payload["ACCOUNT_ROTATION_MODE"] == "per_task"
-    assert payload["ACCOUNT_STATE_DIR"] == "state"
 
     update_response = client.put(
         "/api/settings/rotation",
@@ -94,7 +106,6 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
             "ACCOUNT_ROTATION_MODE": "on_failure",
             "ACCOUNT_ROTATION_RETRY_LIMIT": 4,
             "ACCOUNT_BLACKLIST_TTL": 900,
-            "ACCOUNT_STATE_DIR": "accounts",
         },
     )
     assert update_response.status_code == 200
@@ -104,7 +115,6 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
     assert "ACCOUNT_ROTATION_MODE=on_failure" in latest
     assert "ACCOUNT_ROTATION_RETRY_LIMIT=4" in latest
     assert "ACCOUNT_BLACKLIST_TTL=900" in latest
-    assert "ACCOUNT_STATE_DIR=accounts" in latest
 
 
 def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path, monkeypatch):
@@ -188,7 +198,7 @@ def test_update_notification_settings_rejects_invalid_channel_config(tmp_path, m
     assert "WEBHOOK_HEADERS" in webhook_response.text
 
 
-def test_system_status_includes_notification_channel_flags(tmp_path, monkeypatch):
+def test_system_status_includes_notification_channel_flags(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -321,7 +331,7 @@ def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path,
     assert captured[0]["url"] == "https://ntfy.sh/demo-topic"
 
 
-def test_ai_settings_fall_back_to_runtime_environment_when_env_file_missing(tmp_path, monkeypatch):
+def test_ai_settings_fall_back_to_runtime_environment_when_env_file_missing(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     monkeypatch.setattr(env_manager, "env_file", env_file)
@@ -437,3 +447,84 @@ def test_ai_test_endpoint_falls_back_to_responses_when_chat_completions_api_404(
     assert request_history[0][1]["messages"][0]["content"] == settings.AI_TEST_PROMPT
     assert request_history[1][0] == "responses"
     assert request_history[1][1]["input"][0]["content"][0]["text"] == settings.AI_TEST_PROMPT
+
+
+def test_ai_account_crud_round_trip(mysql_test_env):
+    client = _build_settings_client()
+
+    create_response = client.post(
+        "/api/settings/ai-accounts",
+        json={
+            "name": "图片主账号",
+            "api_key": "sk-demo",
+            "base_url": "https://example.com/v1",
+            "model_name": "demo-vision",
+            "supports_image": True,
+            "supports_text": False,
+            "enabled": True,
+            "priority": 10,
+            "notes": "只处理图片任务",
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()["item"]
+    assert created["name"] == "图片主账号"
+    assert created["api_key"] == ""
+    assert created["api_key_set"] is True
+
+    list_response = client.get("/api/settings/ai-accounts")
+    assert list_response.status_code == 200
+    items = list_response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["supports_image"] is True
+    assert items[0]["supports_text"] is False
+    assert items[0]["last_test_status"] is None
+
+    account_id = created["id"]
+    update_response = client.patch(
+        f"/api/settings/ai-accounts/{account_id}",
+        json={
+            "supports_text": True,
+            "priority": 5,
+        },
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()["item"]
+    assert updated["supports_text"] is True
+    assert updated["priority"] == 5
+
+    class _FakeOpenAI:
+        def __init__(self, **kwargs):
+            self.responses = self
+            self.chat = type("_Chat", (), {"completions": self})()
+
+        def create(self, **kwargs):
+            if "messages" in kwargs:
+                raise Exception("Error code: 404 - page not found")
+            return type(
+                "_Response",
+                (),
+                {"output_text": "OK"},
+            )()
+
+    import openai
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    try:
+        test_response = client.post(f"/api/settings/ai-accounts/{account_id}/test")
+    finally:
+        monkeypatch.undo()
+
+    assert test_response.status_code == 200
+    tested = test_response.json()["item"]
+    assert tested["last_test_status"] == "success"
+    assert "测试成功" in tested["last_test_message"]
+    assert tested["last_tested_at"] is not None
+
+    delete_response = client.delete(f"/api/settings/ai-accounts/{account_id}")
+    assert delete_response.status_code == 200
+
+    final_list = client.get("/api/settings/ai-accounts")
+    assert final_list.status_code == 200
+    assert final_list.json()["items"] == []

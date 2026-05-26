@@ -8,6 +8,7 @@ const enUSExtra = {
     nav: {
       tasks: 'Task Studio',
       results: 'Result Intel',
+      notifications: 'Notifications',
     },
     note: 'Everything you see here belongs only to the current tenant, including tasks, result sets, and filtering rules.',
     tasks: {
@@ -229,9 +230,9 @@ const enUSExtra = {
     },
     list: {
       title: 'Account Pool List',
-      description: 'Account files are stored under state/ and can be assigned by admins to tasks.',
+      description: 'Login states are centrally managed and can be assigned to tasks.',
       name: 'Account Name',
-      file: 'State File',
+      file: 'Login State Ref',
       actions: 'Actions',
       empty: 'No accounts yet',
       createTask: 'Create Task',
@@ -267,6 +268,7 @@ const enUSExtra = {
     title: 'Notification Delivery Settings',
     description: 'Configure, test, and clear each channel independently. Sensitive fields are never echoed back; leaving them blank preserves the current value.',
     noActiveChannels: 'No notification channel configured yet',
+    noAvailableChannels: 'The admin has not opened any notification channels for tenants yet.',
     enabledChannels: 'Enabled: {channels}',
     supportedVariables: 'Supported variables: title / content / price / reason / desktop_link / mobile_link',
     globalBehavior: 'Global Behavior',

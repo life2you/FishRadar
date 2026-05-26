@@ -15,7 +15,7 @@ const isTenant = computed(() => role.value === 'tenant')
 <template>
   <div
     v-if="isTenant"
-    class="relative min-h-screen w-full overflow-hidden bg-[linear-gradient(180deg,#fcf7ef_0%,#f6efe3_46%,#f3ede8_100%)] selection:bg-primary/15"
+    class="relative min-h-screen w-full overflow-hidden bg-[linear-gradient(180deg,#fbf8f1_0%,#f2f6ef_44%,#eef5f3_100%)] selection:bg-primary/15"
   >
     <a
       href="#main-content"
@@ -25,10 +25,10 @@ const isTenant = computed(() => role.value === 'tenant')
     </a>
 
     <div aria-hidden="true" class="pointer-events-none fixed inset-0 overflow-hidden">
-      <div class="absolute left-[-8%] top-[-3%] h-[34rem] w-[34rem] rounded-full bg-[#dfc191]/30 blur-[140px]"></div>
-      <div class="absolute right-[-10%] top-[8%] h-[28rem] w-[28rem] rounded-full bg-[#9ab7a2]/22 blur-[130px]"></div>
-      <div class="absolute bottom-[-14%] left-[24%] h-[28rem] w-[28rem] rounded-full bg-[#d28766]/16 blur-[135px]"></div>
-      <div class="absolute inset-x-[10%] top-[8.5rem] h-px bg-gradient-to-r from-transparent via-[#b69777]/45 to-transparent"></div>
+      <div class="absolute left-[-8%] top-[-3%] h-[34rem] w-[34rem] rounded-full bg-[#cfe0bf]/28 blur-[140px]"></div>
+      <div class="absolute right-[-10%] top-[8%] h-[28rem] w-[28rem] rounded-full bg-[#b8d7ce]/24 blur-[130px]"></div>
+      <div class="absolute bottom-[-14%] left-[24%] h-[28rem] w-[28rem] rounded-full bg-[#f0d9b6]/22 blur-[135px]"></div>
+      <div class="absolute inset-x-[10%] top-[8.5rem] h-px bg-gradient-to-r from-transparent via-[#a8beaa]/45 to-transparent"></div>
       <div class="absolute inset-x-[6%] bottom-0 h-[38%] bg-[radial-gradient(circle_at_bottom,rgba(255,255,255,0.22),transparent_68%)]"></div>
     </div>
 
@@ -45,7 +45,7 @@ const isTenant = computed(() => role.value === 'tenant')
     </main>
   </div>
 
-  <div v-else class="relative min-h-screen w-full flex flex-col bg-[#f2f5f8] selection:bg-primary/15">
+  <div v-else class="relative min-h-screen w-full flex flex-col bg-[linear-gradient(180deg,#f7f8f2_0%,#f1f6f2_46%,#eef4f6_100%)] selection:bg-primary/15">
     <a
       href="#main-content"
       class="sr-only focus:not-sr-only focus:absolute focus:left-4 focus:top-4 focus:z-[120] focus:rounded-lg focus:bg-primary focus:px-4 focus:py-2 focus:text-sm focus:font-semibold focus:text-primary-foreground"
@@ -55,9 +55,9 @@ const isTenant = computed(() => role.value === 'tenant')
 
     <!-- 背景装饰渐变 -->
     <div aria-hidden="true" class="fixed inset-0 pointer-events-none overflow-hidden">
-      <div class="absolute -top-[12%] -left-[8%] h-[42%] w-[38%] rounded-full bg-slate-900/5 blur-[130px]"></div>
-      <div class="absolute top-[16%] -right-[8%] h-[38%] w-[34%] rounded-full bg-sky-500/8 blur-[120px]"></div>
-      <div class="absolute -bottom-[12%] left-[16%] h-[34%] w-[30%] rounded-full bg-slate-500/5 blur-[110px]"></div>
+      <div class="absolute -top-[12%] -left-[8%] h-[42%] w-[38%] rounded-full bg-[#c8dacb]/24 blur-[130px]"></div>
+      <div class="absolute top-[16%] -right-[8%] h-[38%] w-[34%] rounded-full bg-[#c7dbe8]/28 blur-[120px]"></div>
+      <div class="absolute -bottom-[12%] left-[16%] h-[34%] w-[30%] rounded-full bg-[#ead5b8]/20 blur-[110px]"></div>
     </div>
 
     <!-- Header -->

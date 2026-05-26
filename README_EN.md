@@ -9,7 +9,7 @@ A Playwright and AI-powered multi-task real-time monitoring tool for Xianyu (闲
 - **Web Visual Management**: Task management, account management, AI criteria editing, run logs, results browsing
 - **AI-Driven**: Natural language task creation, multimodal model for in-depth product analysis
 - **Multi-Task Concurrency**: Independent configuration for keywords, prices, filters, and AI prompts
-- **MySQL-Ready Primary Storage**: Tasks, results, and price history can run on MySQL, with SQLite kept as a fallback for local setups
+- **MySQL Primary Storage**: Tasks, results, and price history are stored in MySQL
 - **Advanced Filtering**: Free shipping, new listing time range, province/city/district filtering
 - **Instant Notifications**: Supports ntfy.sh, WeChat Work (企业微信), Bark, Telegram, Webhook
 - **Scheduled Tasks**: Cron expression configuration for periodic tasks

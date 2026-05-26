@@ -67,41 +67,41 @@ function enterWorkspace() {
 </script>
 
 <template>
-  <div class="mx-auto max-w-4xl space-y-6">
-    <section class="overflow-hidden rounded-[32px] border border-[#e7d7bf] bg-[linear-gradient(135deg,#fff8ee_0%,#f7ead7_100%)] p-6 shadow-[0_24px_80px_rgba(79,58,33,0.10)] md:p-8">
-      <p class="text-[11px] font-bold uppercase tracking-[0.26em] text-[#9f7d58]">{{ t('activation.eyebrow') }}</p>
-      <h1 class="mt-4 text-3xl font-black tracking-[-0.04em] text-[#241a12] md:text-4xl">
+  <div class="mx-auto max-w-4xl space-y-5">
+    <section class="overflow-hidden rounded-[24px] border border-[#cfddd5] bg-[linear-gradient(135deg,#f6faf6_0%,#edf4ef_46%,#e9f2f4_100%)] p-4.5 shadow-[0_14px_34px_rgba(76,104,84,0.09)] md:p-5">
+      <p class="text-[10px] font-bold uppercase tracking-[0.24em] text-[#72907f]">{{ t('activation.eyebrow') }}</p>
+      <h1 class="mt-2 text-[1.65rem] font-black tracking-[-0.04em] text-[#203228] md:text-[1.95rem]">
         {{ t('activation.title', { tenant: tenantTitle }) }}
       </h1>
-      <p class="mt-4 max-w-2xl text-sm leading-7 text-[#675240]">
+      <p class="mt-1.5 max-w-[34rem] text-[13px] leading-6 text-[#597264]">
         {{ workspaceEnabled ? t('activation.activeDescription') : (tenantAccessExpired ? t('activation.expiredDescription') : t('activation.description')) }}
       </p>
 
-      <div class="mt-6 grid gap-4 md:grid-cols-3">
-        <article class="rounded-[24px] border border-white/90 bg-white/82 p-4 shadow-sm">
-          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9f7d58]">{{ t('activation.cards.registered') }}</p>
-          <p class="mt-3 text-base font-bold text-[#2b1d13]">{{ tenantTitle }}</p>
-          <p class="mt-2 text-sm leading-6 text-[#6d5947]">{{ t('activation.cards.registeredHint') }}</p>
+      <div class="mt-3.5 grid gap-2 md:grid-cols-3">
+        <article class="rounded-[15px] border border-[#d7e2db] bg-white/92 px-3 py-2.5 shadow-sm">
+          <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-[#7b9688]">{{ t('activation.cards.registered') }}</p>
+          <p class="mt-1 text-[15px] font-bold text-[#203228]">{{ tenantTitle }}</p>
+          <p class="mt-0.5 text-[12px] leading-5 text-[#5f796b]">{{ t('activation.cards.registeredHint') }}</p>
         </article>
-        <article class="rounded-[24px] border border-white/90 bg-white/82 p-4 shadow-sm">
-          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9f7d58]">{{ t('activation.cards.workspace') }}</p>
-          <p class="mt-3 text-base font-bold text-[#2b1d13]">{{ workspaceEnabled ? t('activation.workspaceReady') : t('activation.workspacePending') }}</p>
-          <p class="mt-2 text-sm leading-6 text-[#6d5947]">
+        <article class="rounded-[15px] border border-[#d7e2db] bg-white/92 px-3 py-2.5 shadow-sm">
+          <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-[#7b9688]">{{ t('activation.cards.workspace') }}</p>
+          <p class="mt-1 text-[15px] font-bold text-[#203228]">{{ workspaceEnabled ? t('activation.workspaceReady') : t('activation.workspacePending') }}</p>
+          <p class="mt-0.5 text-[12px] leading-5 text-[#5f796b]">
             {{ tenantAccessExpired ? t('activation.cards.workspaceExpiredHint') : t('activation.cards.workspaceHint') }}
           </p>
-          <p class="mt-2 text-xs text-[#8b745e]">
+          <p class="mt-0.5 text-[11px] text-[#7d9789]">
             {{ t('activation.expiryAt', { value: accessExpiryText }) }}
           </p>
         </article>
-        <article class="rounded-[24px] border border-white/90 bg-white/82 p-4 shadow-sm">
-          <p class="text-[11px] font-bold uppercase tracking-[0.22em] text-[#9f7d58]">{{ t('activation.cards.ai') }}</p>
-          <p class="mt-3 text-base font-bold text-[#2b1d13]">{{ canUseAi ? t('activation.aiReady') : t('activation.aiPending') }}</p>
-          <p class="mt-2 text-sm leading-6 text-[#6d5947]">{{ t('activation.cards.aiHint') }}</p>
+        <article class="rounded-[15px] border border-[#d7e2db] bg-white/92 px-3 py-2.5 shadow-sm">
+          <p class="text-[10px] font-bold uppercase tracking-[0.2em] text-[#7b9688]">{{ t('activation.cards.ai') }}</p>
+          <p class="mt-1 text-[15px] font-bold text-[#203228]">{{ canUseAi ? t('activation.aiReady') : t('activation.aiPending') }}</p>
+          <p class="mt-0.5 text-[12px] leading-5 text-[#5f796b]">{{ t('activation.cards.aiHint') }}</p>
         </article>
       </div>
     </section>
 
-    <Card class="border-[#eadbc8] bg-white/90 shadow-[0_20px_70px_rgba(77,56,35,0.08)]">
+    <Card class="border-[#d8e6da] bg-white/90 shadow-[0_18px_52px_rgba(76,104,84,0.08)]">
       <CardHeader>
         <CardTitle>{{ t('activation.formTitle') }}</CardTitle>
         <CardDescription>{{ workspaceEnabled ? t('activation.formReadyDescription') : t('activation.formDescription') }}</CardDescription>
@@ -113,7 +113,7 @@ function enterWorkspace() {
             <Input
               id="activation-code"
               v-model="code"
-              class="h-12 rounded-2xl border-[#dfcfbb] bg-[#fffdf8] uppercase tracking-[0.18em]"
+              class="h-12 rounded-2xl border-[#d6e6db] bg-[#fbfefb] uppercase tracking-[0.18em]"
               :placeholder="t('activation.codePlaceholder')"
             />
           </div>
@@ -124,7 +124,7 @@ function enterWorkspace() {
             {{ t('activation.expiredNotice') }}
           </div>
           <Button
-            class="h-12 rounded-full bg-[#21160f] px-6 text-white hover:bg-[#2f2016]"
+            class="h-12 rounded-full bg-[#2b5b47] px-6 text-white hover:bg-[#244d3d]"
             :disabled="isSubmitting"
             @click="handleActivate"
           >
@@ -133,10 +133,10 @@ function enterWorkspace() {
         </template>
 
         <template v-else>
-          <div class="rounded-[24px] border border-[#d8e5d8] bg-[#edf7ef] px-4 py-4 text-sm leading-6 text-[#35523d]">
+          <div class="rounded-[20px] border border-[#d8e5d8] bg-[#edf7ef] px-4 py-4 text-sm leading-6 text-[#35523d]">
             {{ t('activation.readyNotice') }}
           </div>
-          <Button class="h-12 rounded-full bg-[#21160f] px-6 text-white hover:bg-[#2f2016]" @click="enterWorkspace">
+          <Button class="h-12 rounded-full bg-[#2b5b47] px-6 text-white hover:bg-[#244d3d]" @click="enterWorkspace">
             {{ t('activation.enterWorkspace') }}
           </Button>
         </template>

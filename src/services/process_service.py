@@ -11,10 +11,15 @@ import sys
 from datetime import datetime
 from typing import Awaitable, Callable, Dict, TextIO
 
-from src.ai_handler import send_ntfy_notification
-from src.config import STATE_FILE
 from src.failure_guard import FailureGuard
-from src.infrastructure.persistence.sqlite_task_repository import find_task_by_id_sync
+from src.infrastructure.config.settings import scraper_settings
+from src.infrastructure.persistence.mysql_task_repository import find_task_by_id_sync
+from src.services.account_state_service import (
+    materialize_runtime_account_states_sync,
+    get_runtime_account_state_dir,
+    get_runtime_default_state_file,
+)
+from src.services.notification_service import send_product_notification
 from src.utils import build_task_log_path
 
 STOP_TIMEOUT_SECONDS = 20
@@ -60,7 +65,15 @@ class ProcessService:
         except Exception:
             pass
 
-        return STATE_FILE if os.path.exists(STATE_FILE) else None
+        state_file = scraper_settings.state_file
+        return state_file if os.path.exists(state_file) else None
+
+    def _resolve_tenant_id(self, task_id: int) -> int | None:
+        try:
+            task = find_task_by_id_sync(task_id)
+        except Exception:
+            return None
+        return task.tenant_id if task else None
 
     def is_running(self, task_id: int) -> bool:
         """检查任务是否正在运行"""
@@ -106,9 +119,15 @@ class ProcessService:
         log_file_handle: TextIO,
     ) -> asyncio.subprocess.Process:
         preexec_fn = os.setsid if sys.platform != "win32" else None
+        runtime_state = materialize_runtime_account_states_sync(
+            runtime_state_dir=get_runtime_account_state_dir(),
+            runtime_default_state_file=get_runtime_default_state_file(),
+        )
         child_env = os.environ.copy()
         child_env["PYTHONIOENCODING"] = "utf-8"
         child_env["PYTHONUTF8"] = "1"
+        child_env["ACCOUNT_STATE_DIR"] = runtime_state["runtime_state_dir"]
+        child_env["STATE_FILE"] = runtime_state["runtime_default_state_file"]
         return await asyncio.create_subprocess_exec(
             *self._build_spawn_command(task_id, task_name),
             stdout=log_file_handle,
@@ -143,7 +162,7 @@ class ProcessService:
             cookie_path=self._resolve_cookie_path(task_id),
         )
         if decision.skip:
-            await self._notify_skip(task_name, decision)
+            await self._notify_skip(task_id, task_name, decision)
             return False
 
         log_file_path = ""
@@ -161,15 +180,16 @@ class ProcessService:
         await self._invoke_hook(self._on_started, task_id)
         return True
 
-    async def _notify_skip(self, task_name: str, decision) -> None:
+    async def _notify_skip(self, task_id: int, task_name: str, decision) -> None:
         print(
             f"[FailureGuard] 跳过启动任务 '{task_name}'，已暂停重试 "
             f"(连续失败 {decision.consecutive_failures}/{self.failure_guard.threshold})"
         )
         if not decision.should_notify:
             return
+        tenant_id = self._resolve_tenant_id(task_id)
         try:
-            await send_ntfy_notification(
+            await send_product_notification(
                 {
                     "商品标题": f"[任务暂停] {task_name}",
                     "当前售价": "N/A",
@@ -180,6 +200,7 @@ class ProcessService:
                 f"连续失败: {decision.consecutive_failures}/{self.failure_guard.threshold}\n"
                 f"暂停到: {decision.paused_until.strftime('%Y-%m-%d %H:%M:%S') if decision.paused_until else 'N/A'}\n"
                 "修复方法: 更新登录态/cookies文件后会自动恢复。",
+                tenant_id,
             )
         except Exception as exc:
             print(f"发送任务暂停通知失败: {exc}")

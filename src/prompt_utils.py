@@ -6,6 +6,7 @@ from typing import Awaitable, Callable, Optional
 import aiofiles
 
 from src.infrastructure.external.ai_client import AIClient
+from src.services.ai_account_service import list_ai_route_candidates
 
 # The meta-prompt to instruct the AI
 META_PROMPT_TEMPLATE = """
@@ -72,6 +73,31 @@ async def _request_generated_text(ai_client: AIClient, prompt: str) -> str:
     return generated_text.strip()
 
 
+async def _generate_text_with_candidates(prompt: str) -> str:
+    candidates = await list_ai_route_candidates(require_images=False)
+    if not candidates:
+        raise RuntimeError("没有可用的 AI 账号可用于生成分析标准。")
+
+    last_error: Exception | None = None
+    for account in candidates:
+        ai_client = AIClient(account if account.id != 0 else None)
+        active_error: BaseException | None = None
+        try:
+            if not ai_client.is_available():
+                ai_client.refresh()
+            if not ai_client.is_available():
+                continue
+            return await _request_generated_text(ai_client, prompt)
+        except Exception as exc:
+            active_error = exc
+            last_error = exc
+            print(f"账号 {account.name} 生成分析标准失败: {exc}")
+        finally:
+            await _close_ai_client(ai_client, active_error)
+
+    raise RuntimeError(f"所有 AI 账号生成分析标准均失败: {last_error}")
+
+
 async def _close_ai_client(
     ai_client: AIClient,
     active_error: BaseException | None,
@@ -92,14 +118,7 @@ async def generate_criteria(
     """
     Generates a new criteria file content using AI.
     """
-    ai_client = AIClient()
-    active_error: BaseException | None = None
     try:
-        if not ai_client.is_available():
-            ai_client.refresh()
-        if not ai_client.is_available():
-            raise RuntimeError("AI客户端未初始化，无法生成分析标准。请检查.env配置。")
-
         await _report_progress(progress_callback, "reference", "正在读取参考文件。")
         print(f"正在读取参考文件: {reference_file_path}")
         reference_text = _read_reference_text(reference_file_path)
@@ -112,12 +131,9 @@ async def generate_criteria(
         )
 
         await _report_progress(progress_callback, "llm", "正在调用 AI 生成分析标准。")
-        return await _request_generated_text(ai_client, prompt)
+        return await _generate_text_with_candidates(prompt)
     except Exception as exc:
-        active_error = exc
         raise
-    finally:
-        await _close_ai_client(ai_client, active_error)
 
 
 async def update_config_with_new_task(new_task: dict, config_file: str = "config.json"):
