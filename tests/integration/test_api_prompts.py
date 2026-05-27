@@ -6,6 +6,27 @@ from fastapi.testclient import TestClient
 from src.api.routes import prompts
 
 
+def test_prompts_builtin_documents_are_available_without_disk_files(
+    tmp_path,
+    monkeypatch,
+    mysql_test_env,
+):
+    monkeypatch.chdir(tmp_path)
+
+    app = FastAPI()
+    app.include_router(prompts.router)
+    client = TestClient(app)
+
+    list_resp = client.get("/api/prompts")
+    assert list_resp.status_code == 200
+    assert "base_prompt.txt" in list_resp.json()
+    assert "macbook_criteria.txt" in list_resp.json()
+
+    get_resp = client.get("/api/prompts/macbook_criteria.txt")
+    assert get_resp.status_code == 200
+    assert "MacBook Air" in get_resp.json()["content"]
+
+
 def test_prompts_list_and_get_are_backed_by_database(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     prompts_dir = tmp_path / "prompts"

@@ -27,6 +27,7 @@ from src.services.auth_service import (
 )
 from src.services.prompt_document_service import (
     PROMPT_SOURCE_SYSTEM,
+    ensure_builtin_prompt_documents,
 )
 
 
@@ -48,6 +49,7 @@ def bootstrap_mysql_storage(
 ) -> None:
     if db_path is not None:
         raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
+    ensure_builtin_prompt_documents()
     with BOOTSTRAP_LOCK:
         with mysql_connection() as conn:
             init_schema(conn)
