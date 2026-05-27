@@ -5,10 +5,8 @@ def _load_scraper(monkeypatch, *, login_is_edge: bool, running_in_docker: bool):
     monkeypatch.setenv("LOGIN_IS_EDGE", "true" if login_is_edge else "false")
     monkeypatch.setenv("RUNNING_IN_DOCKER", "true" if running_in_docker else "false")
 
-    import src.config as config_module
     import src.scraper as scraper_module
 
-    importlib.reload(config_module)
     reloaded_scraper = importlib.reload(scraper_module)
     reloaded_scraper.EDGE_DOCKER_WARNING_PRINTED = False
     return reloaded_scraper

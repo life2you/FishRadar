@@ -53,7 +53,7 @@ export interface DashboardSuggestion {
   title: string
   description: string
   actionLabel: string
-  routeName: 'Tasks' | 'Settings'
+  routeName: 'Tasks' | 'Settings' | 'Tenants' | 'Accounts'
   query: Record<string, string>
 }
 

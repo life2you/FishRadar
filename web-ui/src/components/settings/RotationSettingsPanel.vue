@@ -39,10 +39,6 @@ const emit = defineEmits<{
 
         <div class="grid gap-4">
           <div class="grid gap-2">
-            <Label>{{ t('rotation.account.stateDir') }}</Label>
-            <Input v-model="settings.ACCOUNT_STATE_DIR" placeholder="state" />
-          </div>
-          <div class="grid gap-2">
             <Label>{{ t('rotation.mode') }}</Label>
             <Select v-model="settings.ACCOUNT_ROTATION_MODE">
               <SelectTrigger>

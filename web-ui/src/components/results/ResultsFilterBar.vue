@@ -71,6 +71,7 @@ const emit = defineEmits<{
   (e: 'update:sortBy', value: 'crawl_time' | 'publish_time' | 'price' | 'keyword_hit_count'): void
   (e: 'update:sortOrder', value: 'asc' | 'desc'): void
   (e: 'refresh'): void
+  (e: 'reanalyze'): void
   (e: 'export'): void
   (e: 'delete'): void
   (e: 'manage-blacklist'): void
@@ -181,6 +182,14 @@ function handleToggleKeywordRecommended(value: boolean) {
       <div class="flex flex-col gap-2 sm:flex-row sm:flex-wrap lg:justify-end">
         <Button @click="emit('refresh')" :disabled="props.isLoading">
           {{ t('common.refresh') }}
+        </Button>
+
+        <Button
+          variant="outline"
+          @click="emit('reanalyze')"
+          :disabled="props.isLoading || !props.selectedFile"
+        >
+          {{ t('results.filters.reanalyze') }}
         </Button>
 
         <Button

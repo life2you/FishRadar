@@ -1,22 +1,14 @@
-"""Task-level failure circuit breaker.
-
-目标:
-- 当登录态失效/风控导致任务持续失败时，避免无限重试、避免高频请求。
-- 失败达到阈值后暂停任务一段时间。
-- 暂停期间最多每天通知一次，直到用户更新 cookies / 登录态文件后自动恢复。
-
-说明:
-- 仅使用标准库，既可被 API 主进程使用，也可被爬虫子进程使用。
-"""
+"""Task-level failure circuit breaker backed by MySQL."""
 
 from __future__ import annotations
 
-import json
 import os
-import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Optional
+
+from src.infrastructure.persistence.mysql_connection import mysql_connection
+from src.services.platform_settings_service import load_failure_guard_settings_sync
 
 
 try:
@@ -87,62 +79,6 @@ def _cookie_changed(
     return current > (previous_mtime + 1e-6)
 
 
-class _FileLock:
-    def __init__(self, fh):
-        self._fh = fh
-
-    def __enter__(self):
-        try:
-            import fcntl
-
-            fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-        except Exception:
-            pass
-        return self
-
-    def __exit__(self, exc_type, exc, tb):
-        try:
-            import fcntl
-
-            fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        return False
-
-
-def _ensure_parent_dir(path: str) -> None:
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-
-
-def _read_json_file(path: str) -> dict:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return data if isinstance(data, dict) else {}
-    except FileNotFoundError:
-        return {}
-    except Exception:
-        # 文件损坏时保留现场，避免无限解析失败。
-        try:
-            ts = str(int(time.time()))
-            os.replace(path, f"{path}.corrupt.{ts}")
-        except Exception:
-            pass
-        return {}
-
-
-def _atomic_write_json(path: str, data: dict) -> None:
-    _ensure_parent_dir(path)
-    tmp = f"{path}.tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2, sort_keys=True)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
 @dataclass(frozen=True)
 class SkipDecision:
     skip: bool
@@ -161,61 +97,114 @@ class FailureGuard:
         pause_seconds: Optional[int] = None,
         tz_name: Optional[str] = None,
     ):
-        self.path = (
-            path
-            or os.getenv("TASK_FAILURE_GUARD_PATH")
-            or "logs/task-failure-guard.json"
-        )
+        # `path` is kept only to avoid breaking older call sites; runtime state is stored in DB.
+        configured = load_failure_guard_settings_sync()
         self.threshold = max(
-            1, threshold or _as_int(os.getenv("TASK_FAILURE_THRESHOLD"), 3)
+            1,
+            threshold
+            or _as_int(configured.get("TASK_FAILURE_THRESHOLD"), 3),
         )
         self.pause_seconds = max(
             60,
             pause_seconds
-            or _as_int(os.getenv("TASK_FAILURE_PAUSE_SECONDS"), 24 * 60 * 60),
+            or _as_int(configured.get("TASK_FAILURE_PAUSE_SECONDS"), 24 * 60 * 60),
         )
-        self.tz_name = tz_name or os.getenv("TASK_FAILURE_TZ") or "Asia/Shanghai"
+        self.tz_name = (
+            tz_name
+            or str(configured.get("TASK_FAILURE_TZ") or "Asia/Shanghai")
+        )
 
-    def _load(self) -> dict:
-        data = _read_json_file(self.path)
-        if "tasks" not in data or not isinstance(data.get("tasks"), dict):
-            data = {"version": 1, "tasks": {}}
-        data.setdefault("version", 1)
-        return data
+    def _default_entry(self, task_key: str, *, current: Optional[datetime] = None) -> dict:
+        return {
+            "task_key": task_key,
+            "consecutive_failures": 0,
+            "paused_until": None,
+            "last_notified_date": None,
+            "last_failure_reason": None,
+            "last_failure_at": None,
+            "last_success_at": None,
+            "cookie_path": None,
+            "cookie_mtime": None,
+            "updated_at": _dt_to_str(current or _now(self.tz_name)),
+        }
 
-    def _save(self, data: dict) -> None:
-        _atomic_write_json(self.path, data)
+    def _ensure_row(self, conn, task_key: str, *, current: datetime) -> None:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO task_failure_guards (
+                task_key, consecutive_failures, updated_at
+            ) VALUES (?, 0, ?)
+            """,
+            (task_key, _dt_to_str(current)),
+        )
 
-    def _update_task(self, task_key: str, updater) -> dict:
-        _ensure_parent_dir(self.path)
-        with open(self.path, "a+", encoding="utf-8") as fh:
-            with _FileLock(fh):
-                fh.seek(0)
-                data = self._load()
-                tasks = data.setdefault("tasks", {})
-                entry = tasks.get(task_key) or {}
-                if not isinstance(entry, dict):
-                    entry = {}
-                entry = updater(entry) or entry
-                tasks[task_key] = entry
-                self._save(data)
-                return entry
+    def _load_entry(
+        self,
+        conn,
+        task_key: str,
+        *,
+        current: datetime,
+        for_update: bool = False,
+        create: bool = False,
+    ) -> dict:
+        if create:
+            self._ensure_row(conn, task_key, current=current)
+        query = """
+            SELECT task_key, consecutive_failures, paused_until, last_notified_date,
+                   last_failure_reason, last_failure_at, last_success_at,
+                   cookie_path, cookie_mtime, updated_at
+            FROM task_failure_guards
+            WHERE task_key = ?
+        """
+        if for_update:
+            query += " FOR UPDATE"
+        row = conn.execute(query, (task_key,)).fetchone()
+        if row is None:
+            return self._default_entry(task_key, current=current)
+        entry = self._default_entry(task_key, current=current)
+        entry.update(dict(row))
+        return entry
+
+    def _save_entry(self, conn, entry: dict) -> None:
+        conn.execute(
+            """
+            INSERT INTO task_failure_guards (
+                task_key, consecutive_failures, paused_until, last_notified_date,
+                last_failure_reason, last_failure_at, last_success_at,
+                cookie_path, cookie_mtime, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                consecutive_failures = VALUES(consecutive_failures),
+                paused_until = VALUES(paused_until),
+                last_notified_date = VALUES(last_notified_date),
+                last_failure_reason = VALUES(last_failure_reason),
+                last_failure_at = VALUES(last_failure_at),
+                last_success_at = VALUES(last_success_at),
+                cookie_path = VALUES(cookie_path),
+                cookie_mtime = VALUES(cookie_mtime),
+                updated_at = VALUES(updated_at)
+            """,
+            (
+                entry["task_key"],
+                int(entry.get("consecutive_failures") or 0),
+                entry.get("paused_until"),
+                entry.get("last_notified_date"),
+                entry.get("last_failure_reason"),
+                entry.get("last_failure_at"),
+                entry.get("last_success_at"),
+                entry.get("cookie_path"),
+                entry.get("cookie_mtime"),
+                entry.get("updated_at"),
+            ),
+        )
 
     def record_success(self, task_key: str, *, now: Optional[datetime] = None) -> None:
-        def _reset(_: dict) -> dict:
-            current = _now(self.tz_name, now=now)
-            return {
-                "consecutive_failures": 0,
-                "paused_until": None,
-                "last_notified_date": None,
-                "last_failure_reason": None,
-                "last_failure_at": None,
-                "last_success_at": _dt_to_str(current),
-                "cookie_path": None,
-                "cookie_mtime": None,
-            }
-
-        self._update_task(task_key, _reset)
+        current = _now(self.tz_name, now=now)
+        with mysql_connection() as conn:
+            entry = self._default_entry(task_key, current=current)
+            entry["last_success_at"] = _dt_to_str(current)
+            self._save_entry(conn, entry)
+            conn.commit()
 
     def should_skip_start(
         self,
@@ -227,66 +216,71 @@ class FailureGuard:
         current = _now(self.tz_name, now=now)
         today = _today_str(self.tz_name, now=current)
 
-        data = self._load()
-        entry = (data.get("tasks") or {}).get(task_key) or {}
-        if not isinstance(entry, dict):
-            entry = {}
+        with mysql_connection() as conn:
+            entry = self._load_entry(
+                conn,
+                task_key,
+                current=current,
+                for_update=True,
+                create=True,
+            )
 
-        paused_until = _str_to_dt(entry.get("paused_until"))
-        consecutive = _as_int(entry.get("consecutive_failures"), 0)
-        last_reason = (entry.get("last_failure_reason") or "").strip() or "未知错误"
-        last_notified_date = entry.get("last_notified_date")
+            paused_until = _str_to_dt(entry.get("paused_until"))
+            consecutive = _as_int(entry.get("consecutive_failures"), 0)
+            last_reason = (entry.get("last_failure_reason") or "").strip() or "未知错误"
+            last_notified_date = entry.get("last_notified_date")
 
-        previous_cookie_mtime = entry.get("cookie_mtime")
-        if cookie_path and previous_cookie_mtime is not None:
+            previous_cookie_mtime = entry.get("cookie_mtime")
             try:
-                previous_cookie_mtime = float(previous_cookie_mtime)
+                previous_cookie_mtime = (
+                    float(previous_cookie_mtime)
+                    if previous_cookie_mtime is not None
+                    else None
+                )
             except (TypeError, ValueError):
                 previous_cookie_mtime = None
 
-        if (
-            paused_until
-            and paused_until > current
-            and cookie_path
-            and _cookie_changed(cookie_path, previous_cookie_mtime)
-        ):
-            # cookies / 登录态更新 => 自动恢复
-            self.record_success(task_key, now=current)
+            if (
+                paused_until
+                and paused_until > current
+                and cookie_path
+                and _cookie_changed(cookie_path, previous_cookie_mtime)
+            ):
+                reset_entry = self._default_entry(task_key, current=current)
+                reset_entry["last_success_at"] = _dt_to_str(current)
+                self._save_entry(conn, reset_entry)
+                conn.commit()
+                return SkipDecision(
+                    skip=False,
+                    should_notify=False,
+                    reason="cookie_updated",
+                    paused_until=None,
+                    consecutive_failures=0,
+                )
+
+            if paused_until and current < paused_until:
+                should_notify = last_notified_date != today
+                if should_notify:
+                    entry["last_notified_date"] = today
+                    entry["updated_at"] = _dt_to_str(current)
+                    self._save_entry(conn, entry)
+                    conn.commit()
+
+                return SkipDecision(
+                    skip=True,
+                    should_notify=should_notify,
+                    reason=last_reason,
+                    paused_until=paused_until,
+                    consecutive_failures=consecutive,
+                )
+
             return SkipDecision(
                 skip=False,
                 should_notify=False,
-                reason="cookie_updated",
+                reason="not_paused",
                 paused_until=None,
-                consecutive_failures=0,
-            )
-
-        if paused_until and current < paused_until:
-            should_notify = last_notified_date != today
-
-            if should_notify:
-
-                def _touch(e: dict) -> dict:
-                    e = dict(e or {})
-                    e["last_notified_date"] = today
-                    return e
-
-                self._update_task(task_key, _touch)
-
-            return SkipDecision(
-                skip=True,
-                should_notify=should_notify,
-                reason=last_reason,
-                paused_until=paused_until,
                 consecutive_failures=consecutive,
             )
-
-        return SkipDecision(
-            skip=False,
-            should_notify=False,
-            reason="not_paused",
-            paused_until=None,
-            consecutive_failures=consecutive,
-        )
 
     def record_failure(
         self,
@@ -300,7 +294,6 @@ class FailureGuard:
         current = _now(self.tz_name, now=now)
         today = _today_str(self.tz_name, now=current)
         cookie_mtime = _get_mtime(cookie_path)
-
         effective_threshold = max(1, int(min_failures_to_pause or self.threshold))
 
         result = {
@@ -310,8 +303,15 @@ class FailureGuard:
             "consecutive_failures": 0,
         }
 
-        def _apply(entry: dict) -> dict:
-            entry = dict(entry or {})
+        with mysql_connection() as conn:
+            entry = self._load_entry(
+                conn,
+                task_key,
+                current=current,
+                for_update=True,
+                create=True,
+            )
+
             previous_paused_until = _str_to_dt(entry.get("paused_until"))
             was_paused = bool(previous_paused_until and current < previous_paused_until)
 
@@ -330,6 +330,7 @@ class FailureGuard:
             entry["consecutive_failures"] = consecutive
             entry["last_failure_reason"] = (reason or "未知错误")[:1000]
             entry["last_failure_at"] = _dt_to_str(current)
+            entry["updated_at"] = _dt_to_str(current)
             if cookie_path:
                 entry["cookie_path"] = cookie_path
                 if cookie_mtime is not None:
@@ -349,9 +350,9 @@ class FailureGuard:
             else:
                 entry["paused_until"] = None
 
+            self._save_entry(conn, entry)
+            conn.commit()
+
             result["opened_circuit"] = opened
             result["consecutive_failures"] = consecutive
-            return entry
-
-        self._update_task(task_key, _apply)
-        return result
+            return result

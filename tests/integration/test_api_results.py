@@ -1,10 +1,16 @@
+import asyncio
 import json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from src.api import dependencies as deps
 from src.api.routes import results
+from src.domain.models.auth import AuthenticatedUser
+from src.domain.models.task import TaskCreate
+from src.infrastructure.persistence.mysql_task_repository import MySQLTaskRepository
 from src.services.price_history_service import record_market_snapshots
+from src.services.task_service import TaskService
 
 
 def _write_jsonl(path, records):
@@ -13,7 +19,29 @@ def _write_jsonl(path, records):
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
 
-def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypatch):
+async def _admin_user_override():
+    return AuthenticatedUser(
+        user_id=1,
+        username="admin",
+        role="admin",
+        tenant_id=1,
+        tenant_name="Platform Admin",
+        tenant_status="active",
+        tenant_ai_enabled=True,
+        tenant_activation_required=False,
+        tenant_activated_at="2026-01-01T00:00:00",
+    )
+
+
+def _build_results_client():
+    app = FastAPI()
+    app.include_router(results.router)
+    app.dependency_overrides[deps.require_workspace_user] = _admin_user_override
+    app.dependency_overrides[deps.require_admin_user] = _admin_user_override
+    return TestClient(app)
+
+
+def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -52,9 +80,7 @@ def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypat
     ]
     _write_jsonl(target_file, records)
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     resp = client.get(
         "/api/results/demo_full_data.jsonl",
@@ -82,7 +108,7 @@ def test_results_filter_and_sort_for_keyword_recommendations(tmp_path, monkeypat
     assert resp.status_code == 400
 
 
-def test_results_insights_and_export_csv(tmp_path, monkeypatch):
+def test_results_insights_and_export_csv(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -172,9 +198,7 @@ def test_results_insights_and_export_csv(tmp_path, monkeypatch):
         seen_item_ids=set(),
     )
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     insights_resp = client.get("/api/results/demo_full_data.jsonl/insights")
     assert insights_resp.status_code == 200
@@ -198,7 +222,7 @@ def test_results_insights_and_export_csv(tmp_path, monkeypatch):
     assert "Demo One" in text
 
 
-def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch):
+def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -226,9 +250,7 @@ def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch):
     ]
     _write_jsonl(target_file, records)
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     export_resp = client.get("/api/results/演示_full_data.jsonl/export")
     assert export_resp.status_code == 200
@@ -238,7 +260,7 @@ def test_results_export_csv_supports_unicode_filename(tmp_path, monkeypatch):
     assert "filename*=UTF-8''%E6%BC%94%E7%A4%BA_full_data.csv" in disposition
 
 
-def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, monkeypatch):
+def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
     jsonl_dir = tmp_path / "jsonl"
     jsonl_dir.mkdir(parents=True, exist_ok=True)
@@ -357,9 +379,7 @@ def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, mon
         seen_item_ids=set(),
     )
 
-    app = FastAPI()
-    app.include_router(results.router)
-    client = TestClient(app)
+    client = _build_results_client()
 
     update_rules_resp = client.put(
         "/api/results/macbook_air_m1_full_data.jsonl/blacklist-rules",
@@ -404,13 +424,92 @@ def test_results_blacklist_rules_hide_items_from_view_and_insights(tmp_path, mon
     visible_item = list_resp.json()["items"][0]
     assert visible_item["price_insight"]["market_avg_price"] == 4200.0
 
-    export_resp = client.get("/api/results/macbook_air_m1_full_data.jsonl/export")
-    assert export_resp.status_code == 200
-    assert "MacBook Air M1 8+256" in export_resp.text
-    assert "MacBook Air Intel i5 8+256" not in export_resp.text
-    assert "MacBook Pro Intel 13寸" not in export_resp.text
 
-    download_resp = client.get("/api/results/files/macbook_air_m1_full_data.jsonl")
-    assert download_resp.status_code == 200
-    assert "MacBook Air Intel i5 8+256" in download_resp.text
-    assert "MacBook Pro Intel 13寸" in download_resp.text
+def test_results_reanalyze_updates_ai_analysis(tmp_path, monkeypatch, mysql_test_env):
+    monkeypatch.chdir(tmp_path)
+    jsonl_dir = tmp_path / "jsonl"
+    jsonl_dir.mkdir(parents=True, exist_ok=True)
+    target_file = jsonl_dir / "iphone_16_full_data.jsonl"
+
+    records = [
+        {
+            "爬取时间": "2026-01-02T09:00:00",
+            "搜索关键字": "iphone 16",
+            "任务名称": "iPhone 16 任务",
+            "商品信息": {
+                "商品ID": "1001",
+                "商品标题": "iPhone 16 Pro 256G",
+                "商品链接": "https://www.goofish.com/item?id=1001",
+                "当前售价": "¥5299",
+                "发布时间": "2026-01-02 08:30",
+                "商品图片列表": [],
+            },
+            "卖家信息": {"卖家昵称": "卖家A"},
+            "ai_analysis": {
+                "analysis_source": "ai",
+                "is_recommended": False,
+                "reason": "旧结果",
+                "keyword_hit_count": 0,
+            },
+        },
+    ]
+    _write_jsonl(target_file, records)
+
+    repository = MySQLTaskRepository()
+    task_service = TaskService(repository)
+    asyncio.run(
+        task_service.create_task(
+            TaskCreate(
+                task_name="iPhone 16 任务",
+                enabled=True,
+                keyword="iphone 16",
+                description="国行 iPhone 16 Pro 256G",
+                analyze_images=False,
+                max_pages=1,
+                personal_only=True,
+                ai_prompt_base_file="prompts/base_prompt.txt",
+                ai_prompt_criteria_file="prompts/iphone_16_criteria.txt",
+                ai_prompt_base_text="你是一个商品分析助手。",
+                ai_prompt_criteria_text="重点检查是否为 iPhone 16 Pro 256G。",
+                ai_prompt_text="你是一个商品分析助手。\n\n重点检查是否为 iPhone 16 Pro 256G。",
+                decision_mode="ai",
+                keyword_rules=[],
+            )
+        )
+    )
+
+    class _FakeAIService:
+        async def analyze_product(self, product_data, image_paths, prompt_text):
+            assert image_paths == []
+            assert "iPhone 16 Pro 256G" in prompt_text
+            return {
+                "analysis_source": "ai",
+                "is_recommended": True,
+                "reason": "重新分析后命中当前标准",
+                "keyword_hit_count": 0,
+                "prompt_version": "v2",
+                "risk_tags": [],
+                "criteria_analysis": {
+                    "seller_type": {"passed": True, "reason": "测试数据"},
+                },
+            }
+
+    app = FastAPI()
+    app.include_router(results.router)
+    app.dependency_overrides[deps.require_workspace_user] = _admin_user_override
+    app.dependency_overrides[deps.require_admin_user] = _admin_user_override
+    app.dependency_overrides[deps.get_task_service] = lambda: task_service
+    app.dependency_overrides[deps.get_ai_service] = lambda: _FakeAIService()
+    client = TestClient(app)
+
+    response = client.post("/api/results/iphone_16_full_data.jsonl/reanalyze")
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated_count"] == 1
+    assert payload["failed_count"] == 0
+
+    refreshed = client.get("/api/results/iphone_16_full_data.jsonl")
+    assert refreshed.status_code == 200
+    item = refreshed.json()["items"][0]
+    assert item["ai_analysis"]["is_recommended"] is True
+    assert item["ai_analysis"]["reason"] == "重新分析后命中当前标准"

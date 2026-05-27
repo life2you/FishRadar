@@ -1,5 +1,5 @@
 """
-SQLite 启动初始化与旧文件迁移。
+MySQL 启动初始化与旧文件迁移。
 """
 from __future__ import annotations
 
@@ -8,36 +8,55 @@ import json
 import threading
 from pathlib import Path
 
-from src.infrastructure.persistence.sqlite_connection import init_schema, sqlite_connection
+from src.infrastructure.persistence.mysql_connection import init_schema, mysql_connection
 from src.infrastructure.persistence.storage_names import (
     build_result_filename,
     normalize_keyword_from_filename,
     normalize_keyword_slug,
 )
+from src.services.account_state_service import (
+    ACCOUNT_STATE_KIND_ACCOUNT,
+    ACCOUNT_STATE_KIND_DEFAULT,
+    DEFAULT_LOGIN_STATE_NAME,
+    ensure_account_states_table,
+    get_legacy_account_state_dir,
+)
+from src.services.auth_service import (
+    bootstrap_default_auth_data,
+    validate_admin_bootstrap_safety_sync,
+)
+from src.services.prompt_document_service import (
+    PROMPT_SOURCE_SYSTEM,
+)
 
 
 BOOTSTRAP_LOCK = threading.Lock()
-LEGACY_CONFIG_FILE = "config.json"
 LEGACY_RESULT_DIR = "jsonl"
 LEGACY_PRICE_HISTORY_DIR = "price_history"
-TASKS_BOOTSTRAP_KEY = "bootstrap:legacy_tasks"
 RESULTS_BOOTSTRAP_KEY = "bootstrap:legacy_results"
 SNAPSHOTS_BOOTSTRAP_KEY = "bootstrap:legacy_price_snapshots"
+ACCOUNT_STATES_BOOTSTRAP_KEY = "bootstrap:legacy_account_states"
+PROMPTS_BOOTSTRAP_KEY = "bootstrap:legacy_prompts"
+LEGACY_PROMPTS_DIR = "prompts"
 
 
-def bootstrap_sqlite_storage(
+def bootstrap_mysql_storage(
     db_path: str | None = None,
     *,
-    legacy_config_file: str | None = LEGACY_CONFIG_FILE,
     legacy_result_dir: str = LEGACY_RESULT_DIR,
     legacy_price_history_dir: str = LEGACY_PRICE_HISTORY_DIR,
 ) -> None:
+    if db_path is not None:
+        raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
     with BOOTSTRAP_LOCK:
-        with sqlite_connection(db_path) as conn:
+        with mysql_connection() as conn:
             init_schema(conn)
-            _import_tasks_if_needed(conn, legacy_config_file)
+            _import_prompt_documents_if_needed(conn, LEGACY_PROMPTS_DIR)
             _import_results_if_needed(conn, legacy_result_dir)
             _import_price_snapshots_if_needed(conn, legacy_price_history_dir)
+            _import_account_states_if_needed(conn)
+        validate_admin_bootstrap_safety_sync()
+        bootstrap_default_auth_data()
 
 
 def _table_is_empty(conn, table_name: str) -> bool:
@@ -52,65 +71,6 @@ def _load_json_file(path: Path):
     if not content:
         return None
     return json.loads(content)
-
-
-def _import_tasks_if_needed(conn, legacy_config_file: str | None) -> None:
-    if _bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY):
-        return
-    if not _table_is_empty(conn, "tasks"):
-        _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-        conn.commit()
-        return
-    if legacy_config_file is None:
-        _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-        conn.commit()
-        return
-    path = Path(legacy_config_file)
-    tasks = _load_json_file(path)
-    if not isinstance(tasks, list):
-        _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-        conn.commit()
-        return
-
-    for index, raw_task in enumerate(tasks):
-        if not isinstance(raw_task, dict):
-            continue
-        conn.execute(
-            """
-            INSERT INTO tasks (
-                id, task_name, enabled, keyword, description, analyze_images,
-                max_pages, personal_only, min_price, max_price, cron,
-                ai_prompt_base_file, ai_prompt_criteria_file, account_state_file,
-                account_strategy, free_shipping, new_publish_option, region,
-                decision_mode, keyword_rules_json, is_running
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                index,
-                raw_task.get("task_name", ""),
-                _as_int(raw_task.get("enabled", True)),
-                raw_task.get("keyword", ""),
-                raw_task.get("description", ""),
-                _as_int(raw_task.get("analyze_images", True)),
-                int(raw_task.get("max_pages", 1) or 1),
-                _as_int(raw_task.get("personal_only", False)),
-                raw_task.get("min_price"),
-                raw_task.get("max_price"),
-                raw_task.get("cron"),
-                raw_task.get("ai_prompt_base_file", "prompts/base_prompt.txt"),
-                raw_task.get("ai_prompt_criteria_file", ""),
-                raw_task.get("account_state_file"),
-                raw_task.get("account_strategy", "auto"),
-                _as_int(raw_task.get("free_shipping", True)),
-                raw_task.get("new_publish_option"),
-                raw_task.get("region"),
-                raw_task.get("decision_mode", "ai"),
-                json.dumps(raw_task.get("keyword_rules") or [], ensure_ascii=False),
-                _as_int(raw_task.get("is_running", False)),
-            ),
-        )
-    _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-    conn.commit()
 
 
 def _import_results_if_needed(conn, legacy_result_dir: str) -> None:
@@ -168,6 +128,78 @@ def _import_price_snapshots_if_needed(conn, legacy_price_history_dir: str) -> No
                     continue
                 _insert_price_snapshot(conn, record)
     _mark_bootstrap_completed(conn, SNAPSHOTS_BOOTSTRAP_KEY)
+    conn.commit()
+
+
+def _import_account_states_if_needed(conn) -> None:
+    if _bootstrap_completed(conn, ACCOUNT_STATES_BOOTSTRAP_KEY):
+        return
+
+    ensure_account_states_table(conn)
+    now = _now_iso()
+    legacy_state_dir = Path(get_legacy_account_state_dir())
+    if legacy_state_dir.exists():
+        for path in sorted(legacy_state_dir.glob("*.json")):
+            content = path.read_text(encoding="utf-8").strip()
+            if not content:
+                continue
+            conn.execute(
+                """
+                INSERT INTO account_states (name, kind, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    state_json = VALUES(state_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (path.stem, ACCOUNT_STATE_KIND_ACCOUNT, content, now, now),
+            )
+
+    default_state_path = Path("xianyu_state.json")
+    if default_state_path.exists():
+        content = default_state_path.read_text(encoding="utf-8").strip()
+        if content:
+            conn.execute(
+                """
+                INSERT INTO account_states (name, kind, state_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE
+                    state_json = VALUES(state_json),
+                    updated_at = VALUES(updated_at)
+                """,
+                (DEFAULT_LOGIN_STATE_NAME, ACCOUNT_STATE_KIND_DEFAULT, content, now, now),
+            )
+
+    _mark_bootstrap_completed(conn, ACCOUNT_STATES_BOOTSTRAP_KEY)
+    conn.commit()
+
+
+def _import_prompt_documents_if_needed(conn, legacy_prompts_dir: str) -> None:
+    if _bootstrap_completed(conn, PROMPTS_BOOTSTRAP_KEY):
+        return
+    prompt_dir = Path(legacy_prompts_dir)
+    if not prompt_dir.exists():
+        _mark_bootstrap_completed(conn, PROMPTS_BOOTSTRAP_KEY)
+        conn.commit()
+        return
+
+    now = _now_iso()
+    for path in sorted(prompt_dir.glob("*.txt")):
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            continue
+        filename = str(path.as_posix())
+        conn.execute(
+            """
+            INSERT INTO prompt_documents (filename, content, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                content = VALUES(content),
+                updated_at = VALUES(updated_at)
+            """,
+            (filename, content, PROMPT_SOURCE_SYSTEM, now, now),
+        )
+
+    _mark_bootstrap_completed(conn, PROMPTS_BOOTSTRAP_KEY)
     conn.commit()
 
 
@@ -294,3 +326,9 @@ def _mark_bootstrap_completed(conn, key: str) -> None:
         """,
         (key,),
     )
+
+
+def _now_iso() -> str:
+    from datetime import datetime
+
+    return datetime.now().isoformat(timespec="seconds")

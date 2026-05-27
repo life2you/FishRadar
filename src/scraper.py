@@ -2,6 +2,7 @@ import asyncio
 import json
 import os
 import random
+import sys
 from datetime import datetime
 from typing import Optional
 from urllib.parse import urlencode
@@ -12,20 +13,10 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from src.ai_handler import (
+from src.infrastructure.config.settings import scraper_settings
+from src.services.image_runtime_service import (
     download_all_images,
-    get_ai_analysis,
-    send_ntfy_notification,
     cleanup_task_images,
-)
-from src.config import (
-    AI_DEBUG_MODE,
-    DETAIL_API_URL_PATTERN,
-    LOGIN_IS_EDGE,
-    RUN_HEADLESS,
-    RUNNING_IN_DOCKER,
-    SKIP_AI_ANALYSIS,
-    STATE_FILE,
 )
 from src.parsers import (
     _parse_search_results_json,
@@ -56,10 +47,17 @@ from src.services.price_history_service import (
     record_market_snapshots,
 )
 from src.services.result_storage_service import load_processed_link_keys
+from src.services.ai_service import AIAnalysisService
+from src.services.notification_service import send_product_notification
 from src.services.seller_profile_cache import SellerProfileCache
 from src.services.search_pagination import (
     advance_search_page,
     is_search_results_response,
+)
+from src.services.task_prompt_service import resolve_runtime_ai_prompt
+from src.services.platform_settings_service import (
+    load_ai_runtime_values_sync,
+    load_rotation_settings_sync,
 )
 
 
@@ -73,6 +71,14 @@ class LoginRequiredError(Exception):
 
 FAILURE_GUARD = FailureGuard()
 EDGE_DOCKER_WARNING_PRINTED = False
+DETAIL_API_URL_PATTERN = "h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail"
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _is_login_url(url: str) -> bool:
@@ -84,15 +90,17 @@ def _is_login_url(url: str) -> bool:
 
 def _resolve_browser_channel() -> str:
     global EDGE_DOCKER_WARNING_PRINTED
-    if RUNNING_IN_DOCKER:
-        if LOGIN_IS_EDGE and not EDGE_DOCKER_WARNING_PRINTED:
+    running_in_docker = _env_bool("RUNNING_IN_DOCKER", scraper_settings.running_in_docker)
+    login_is_edge = _env_bool("LOGIN_IS_EDGE", scraper_settings.login_is_edge)
+    if running_in_docker:
+        if login_is_edge and not EDGE_DOCKER_WARNING_PRINTED:
             print(
                 "检测到 LOGIN_IS_EDGE=true，但 Docker 镜像未内置 Edge，"
                 "任务运行时将改用 Chromium。"
             )
             EDGE_DOCKER_WARNING_PRINTED = True
         return "chromium"
-    return "msedge" if LOGIN_IS_EDGE else "chrome"
+    return "msedge" if login_is_edge else "chrome"
 
 
 def _should_analyze_images(task_config: dict) -> bool:
@@ -159,7 +167,11 @@ async def _notify_task_failure(
     )
 
     try:
-        await send_ntfy_notification(product_data, notify_reason)
+        await send_product_notification(
+            product_data,
+            notify_reason,
+            task_config.get("tenant_id"),
+        )
     except Exception as e:
         print(f"发送任务异常通知失败: {e}")
 
@@ -182,42 +194,44 @@ def _as_int(value, default: int) -> int:
 
 
 def _get_rotation_settings(task_config: dict) -> dict:
+    platform_rotation = load_rotation_settings_sync()
     account_cfg = task_config.get("account_rotation") or {}
     proxy_cfg = task_config.get("proxy_rotation") or {}
 
     account_enabled = _as_bool(
         account_cfg.get("enabled"),
-        _as_bool(os.getenv("ACCOUNT_ROTATION_ENABLED"), False),
+        bool(platform_rotation.get("ACCOUNT_ROTATION_ENABLED", False)),
     )
     account_mode = (
-        account_cfg.get("mode") or os.getenv("ACCOUNT_ROTATION_MODE", "per_task")
+        account_cfg.get("mode") or str(platform_rotation.get("ACCOUNT_ROTATION_MODE", "per_task"))
     ).lower()
     account_state_dir = account_cfg.get("state_dir") or os.getenv(
         "ACCOUNT_STATE_DIR", "state"
     )
     account_retry_limit = _as_int(
         account_cfg.get("retry_limit"),
-        _as_int(os.getenv("ACCOUNT_ROTATION_RETRY_LIMIT"), 2),
+        _as_int(platform_rotation.get("ACCOUNT_ROTATION_RETRY_LIMIT"), 2),
     )
     account_blacklist_ttl = _as_int(
         account_cfg.get("blacklist_ttl_sec"),
-        _as_int(os.getenv("ACCOUNT_BLACKLIST_TTL"), 300),
+        _as_int(platform_rotation.get("ACCOUNT_BLACKLIST_TTL"), 300),
     )
 
     proxy_enabled = _as_bool(
-        proxy_cfg.get("enabled"), _as_bool(os.getenv("PROXY_ROTATION_ENABLED"), False)
+        proxy_cfg.get("enabled"),
+        bool(platform_rotation.get("PROXY_ROTATION_ENABLED", False)),
     )
     proxy_mode = (
-        proxy_cfg.get("mode") or os.getenv("PROXY_ROTATION_MODE", "per_task")
+        proxy_cfg.get("mode") or str(platform_rotation.get("PROXY_ROTATION_MODE", "per_task"))
     ).lower()
-    proxy_pool = proxy_cfg.get("proxy_pool") or os.getenv("PROXY_POOL", "")
+    proxy_pool = proxy_cfg.get("proxy_pool") or str(platform_rotation.get("PROXY_POOL", ""))
     proxy_retry_limit = _as_int(
         proxy_cfg.get("retry_limit"),
-        _as_int(os.getenv("PROXY_ROTATION_RETRY_LIMIT"), 2),
+        _as_int(platform_rotation.get("PROXY_ROTATION_RETRY_LIMIT"), 2),
     )
     proxy_blacklist_ttl = _as_int(
         proxy_cfg.get("blacklist_ttl_sec"),
-        _as_int(os.getenv("PROXY_BLACKLIST_TTL"), 300),
+        _as_int(platform_rotation.get("PROXY_BLACKLIST_TTL"), 300),
     )
 
     return {
@@ -236,13 +250,19 @@ def _get_rotation_settings(task_config: dict) -> dict:
 
 def _get_ai_analysis_concurrency(task_config: dict) -> int:
     configured = task_config.get("ai_analysis_concurrency")
-    default = _as_int(os.getenv("AI_ANALYSIS_CONCURRENCY"), 2)
+    default = _as_int(
+        load_ai_runtime_values_sync().get("AI_ANALYSIS_CONCURRENCY"),
+        2,
+    )
     return max(1, _as_int(configured, default))
 
 
 def _get_seller_profile_cache_ttl(task_config: dict) -> int:
     configured = task_config.get("seller_profile_cache_ttl")
-    default = _as_int(os.getenv("SELLER_PROFILE_CACHE_TTL"), 1800)
+    default = _as_int(
+        load_ai_runtime_values_sync().get("SELLER_PROFILE_CACHE_TTL"),
+        1800,
+    )
     return max(0, _as_int(configured, default))
 
 
@@ -452,7 +472,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     personal_only = task_config.get("personal_only", False)
     min_price = task_config.get("min_price")
     max_price = task_config.get("max_price")
-    ai_prompt_text = task_config.get("ai_prompt_text", "")
+    ai_prompt_text = resolve_runtime_ai_prompt(task_config)
     analyze_images = _should_analyze_images(task_config)
     decision_mode = str(task_config.get("decision_mode", "ai")).strip().lower()
     if decision_mode not in {"ai", "keyword"}:
@@ -468,9 +488,15 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     processed_links = set()
     history_run_id = datetime.now().strftime("%Y%m%d%H%M%S")
     history_seen_item_ids: set[str] = set()
-    historical_snapshots = load_price_snapshots(keyword)
+    historical_snapshots = load_price_snapshots(
+        keyword,
+        tenant_scope=task_config.get("tenant_id"),
+    )
     result_filename = build_result_filename(keyword)
-    processed_links = load_processed_link_keys(keyword)
+    processed_links = load_processed_link_keys(
+        keyword,
+        tenant_scope=task_config.get("tenant_id"),
+    )
     if processed_links:
         print(f"LOG: 发现已存在结果集 {result_filename}，已加载 {len(processed_links)} 个历史商品用于去重。")
     else:
@@ -481,12 +507,12 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
     runtime_plan = resolve_account_runtime_plan(
         strategy=task_config.get("account_strategy"),
         account_state_file=task_config.get("account_state_file"),
-        has_root_state_file=os.path.exists(STATE_FILE),
+        has_root_state_file=os.path.exists(scraper_settings.state_file),
         available_account_files=account_items,
     )
     forced_account = runtime_plan["forced_account"]
     if runtime_plan["prefer_root_state"]:
-        account_items = [STATE_FILE]
+        account_items = [scraper_settings.state_file]
         rotation_settings["account_enabled"] = False
     elif runtime_plan["use_account_pool"]:
         rotation_settings["account_enabled"] = True
@@ -510,8 +536,8 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         if forced_account:
             return RotationItem(value=forced_account)
         if not rotation_settings["account_enabled"]:
-            if os.path.exists(STATE_FILE):
-                return RotationItem(value=STATE_FILE)
+            if os.path.exists(scraper_settings.state_file):
+                return RotationItem(value=scraper_settings.state_file)
             return None
         if (
             rotation_settings["account_mode"] == "per_task"
@@ -560,7 +586,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 "--disable-features=IsolateOrigins,site-per-process",
             ]
 
-            launch_kwargs = {"headless": RUN_HEADLESS, "args": launch_args}
+            launch_kwargs = {"headless": scraper_settings.run_headless, "args": launch_args}
             if proxy_server:
                 launch_kwargs["proxy"] = {"server": proxy_server}
 
@@ -594,17 +620,23 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             seller_profile_cache = SellerProfileCache(
                 ttl_seconds=_get_seller_profile_cache_ttl(task_config)
             )
+            ai_analysis_service = AIAnalysisService()
+            ai_runtime_settings = load_ai_runtime_values_sync()
             analysis_dispatcher = ItemAnalysisDispatcher(
                 concurrency=_get_ai_analysis_concurrency(task_config),
-                skip_ai_analysis=SKIP_AI_ANALYSIS,
+                skip_ai_analysis=bool(ai_runtime_settings.get("SKIP_AI_ANALYSIS", False)),
                 seller_loader=lambda user_id: seller_profile_cache.get_or_load(
                     str(user_id),
                     lambda seller_key: scrape_user_profile(context, seller_key),
                 ),
                 image_downloader=download_all_images,
-                ai_analyzer=get_ai_analysis,
-                notifier=send_ntfy_notification,
-                saver=save_to_jsonl,
+                ai_analyzer=ai_analysis_service.analyze_product,
+                notifier=send_product_notification,
+                saver=lambda record, task_keyword: save_to_jsonl(
+                    record,
+                    task_keyword,
+                    tenant_scope=task_config.get("tenant_id"),
+                ),
             )
 
             # 增强反检测脚本（模拟真实移动设备）
@@ -949,6 +981,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                             run_id=history_run_id,
                             snapshot_time=datetime.now().isoformat(),
                             seen_item_ids=history_seen_item_ids,
+                            tenant_scope=task_config.get("tenant_id"),
                         )
                     )
 
@@ -1097,6 +1130,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                         seller_id=str(user_id) if user_id else None,
                                         zhima_credit_text=zhima_credit_text,
                                         registration_duration_text=registration_duration_text,
+                                        tenant_id=task_config.get("tenant_id"),
                                     )
                                 )
 
@@ -1115,7 +1149,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                 print(
                                     f"   错误: 获取商品详情API响应失败，状态码: {detail_response.status}"
                                 )
-                                if AI_DEBUG_MODE:
+                                if load_ai_runtime_values_sync().get("AI_DEBUG_MODE", False):
                                     print(
                                         f"--- [DETAIL DEBUG] FAILED RESPONSE from {item_data['商品链接']} ---"
                                     )
@@ -1169,7 +1203,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                     await analysis_dispatcher.join()
                 log_time("任务执行完毕，浏览器将在5秒后自动关闭...")
                 await asyncio.sleep(5)
-                if debug_limit:
+                if debug_limit and sys.stdin and sys.stdin.isatty():
                     input("按回车键关闭浏览器...")
                 await browser.close()
 
@@ -1192,8 +1226,8 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         and task_config.get("account_state_file").strip()
     ):
         pause_cookie_path = task_config.get("account_state_file").strip()
-    elif os.path.exists(STATE_FILE):
-        pause_cookie_path = STATE_FILE
+    elif os.path.exists(scraper_settings.state_file):
+        pause_cookie_path = scraper_settings.state_file
 
     decision = FAILURE_GUARD.should_skip_start(
         task_name_for_guard, cookie_path=pause_cookie_path
@@ -1204,7 +1238,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
         )
         if decision.should_notify:
             try:
-                await send_ntfy_notification(
+                await send_product_notification(
                     {
                         "商品标题": f"[任务暂停] {task_name_for_guard}",
                         "当前售价": "N/A",
@@ -1215,6 +1249,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                     f"连续失败: {decision.consecutive_failures}/{FAILURE_GUARD.threshold}\n"
                     f"暂停到: {decision.paused_until.strftime('%Y-%m-%d %H:%M:%S') if decision.paused_until else 'N/A'}\n"
                     "修复方法: 更新登录态/cookies文件后会自动恢复。",
+                    task_config.get("tenant_id"),
                 )
             except Exception as e:
                 print(f"发送任务暂停通知失败: {e}")
@@ -1253,7 +1288,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
             print(last_error)
             break
 
-        state_path = selected_account.value if selected_account else STATE_FILE
+        state_path = selected_account.value if selected_account else scraper_settings.state_file
         last_state_path = state_path
         proxy_server = selected_proxy.value if selected_proxy else None
         if rotation_settings["account_enabled"]:

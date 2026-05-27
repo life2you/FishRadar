@@ -26,6 +26,7 @@ export async function http(url: string, options: FetchOptions = {}) {
 
   const config: RequestInit = {
     ...options,
+    credentials: 'same-origin',
     headers,
   }
 

@@ -19,19 +19,9 @@ function buildSuggestion(
       title: t('dashboard.suggestion.firstTaskTitle'),
       description: t('dashboard.suggestion.firstTaskDescription'),
       actionLabel: t('dashboard.suggestion.firstTaskAction'),
-      routeName: 'Tasks',
-      query: { create: '1' },
+      routeName: 'Tenants',
+      query: {},
     }
-  }
-
-  const query: Record<string, string> = {
-    edit: String(focusTask.task_id),
-    taskName: focusTask.task_name,
-    keyword: focusTask.keyword,
-    maxPages: String(Math.max(3, focusTask.total_items > 80 ? 5 : 4)),
-    newPublishOption: focusTask.recommended_items > 0 ? '1天内' : '最新',
-    freeShipping: 'true',
-    personalOnly: 'true',
   }
 
   return {
@@ -42,8 +32,8 @@ function buildSuggestion(
       ? t('dashboard.suggestion.improveValueDescription', { task: focusTask.task_name })
       : t('dashboard.suggestion.improveHitRateDescription', { task: focusTask.task_name }),
     actionLabel: t('dashboard.suggestion.openTaskAction'),
-    routeName: 'Tasks',
-    query,
+    routeName: focusTask.recommended_items > 0 ? 'Tenants' : 'Accounts',
+    query: {},
   }
 }
 

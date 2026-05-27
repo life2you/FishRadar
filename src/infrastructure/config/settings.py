@@ -40,18 +40,11 @@ else:
 
 class AISettings(_EnvSettings):
     """AI模型配置"""
-    api_key: Optional[str] = _env_field(None, "OPENAI_API_KEY")
-    base_url: str = _env_field("", "OPENAI_BASE_URL")
-    model_name: str = _env_field("", "OPENAI_MODEL_NAME")
     proxy_url: Optional[str] = _env_field(None, "PROXY_URL")
     debug_mode: bool = _env_field(False, "AI_DEBUG_MODE")
     enable_response_format: bool = _env_field(True, "ENABLE_RESPONSE_FORMAT")
     enable_thinking: bool = _env_field(False, "ENABLE_THINKING")
     skip_analysis: bool = _env_field(False, "SKIP_AI_ANALYSIS")
-
-    def is_configured(self) -> bool:
-        """检查AI是否已正确配置"""
-        return bool(self.base_url and self.model_name)
 
 
 class NotificationSettings(_EnvSettings):
@@ -97,13 +90,20 @@ class ScraperSettings(_EnvSettings):
 
 class AppSettings(_EnvSettings):
     """应用主配置"""
+    app_env: str = _env_field("development", "APP_ENV")
     server_port: int = _env_field(8000, "SERVER_PORT")
     web_username: str = _env_field("admin", "WEB_USERNAME")
     web_password: str = _env_field("admin123", "WEB_PASSWORD")
+    auth_cookie_secure: bool = _env_field(False, "AUTH_COOKIE_SECURE")
+    login_rate_limit_max_attempts: int = _env_field(8, "LOGIN_RATE_LIMIT_MAX_ATTEMPTS", ge=1)
+    login_rate_limit_window_seconds: int = _env_field(300, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", ge=60)
+    login_rate_limit_block_seconds: int = _env_field(900, "LOGIN_RATE_LIMIT_BLOCK_SECONDS", ge=60)
+    enforce_production_admin_bootstrap_safety: bool = _env_field(
+        True,
+        "ENFORCE_PRODUCTION_ADMIN_BOOTSTRAP_SAFETY",
+    )
     task_log_retention_days: int = _env_field(7, "TASK_LOG_RETENTION_DAYS", ge=1)
 
-    # 文件路径配置
-    config_file: str = "config.json"
     image_save_dir: str = "images"
     task_image_dir_prefix: str = "task_images_"
 
@@ -111,6 +111,18 @@ class AppSettings(_EnvSettings):
         super().__init__(**kwargs)
         # 创建必要的目录
         os.makedirs(self.image_save_dir, exist_ok=True)
+
+    @property
+    def is_production(self) -> bool:
+        return str(self.app_env or "").strip().lower() in {"prod", "production"}
+
+    @property
+    def uses_default_admin_bootstrap_credentials(self) -> bool:
+        return self.web_username == "admin" and self.web_password == "admin123"
+
+    @property
+    def cookie_secure_enabled(self) -> bool:
+        return self.is_production or self.auth_cookie_secure
 
 
 # 全局配置实例（单例模式）

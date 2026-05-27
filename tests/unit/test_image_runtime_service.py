@@ -1,11 +1,15 @@
 import asyncio
 from pathlib import Path
 
-import src.ai_handler as ai_handler
+from src.services import image_runtime_service
 
 
 def test_download_all_images_runs_with_concurrency(tmp_path, monkeypatch):
-    monkeypatch.setattr(ai_handler, "IMAGE_SAVE_DIR", str(tmp_path / "images"))
+    monkeypatch.setattr(
+        image_runtime_service.settings,
+        "image_save_dir",
+        str(tmp_path / "images"),
+    )
 
     active_downloads = 0
     max_active_downloads = 0
@@ -20,10 +24,10 @@ def test_download_all_images_runs_with_concurrency(tmp_path, monkeypatch):
         active_downloads -= 1
         return save_path
 
-    monkeypatch.setattr(ai_handler, "_download_single_image", fake_download)
+    monkeypatch.setattr(image_runtime_service, "_download_single_image", fake_download)
 
     async def run():
-        return await ai_handler.download_all_images(
+        return await image_runtime_service.download_all_images(
             "product-1",
             [
                 "https://example.com/1.jpg",

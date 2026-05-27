@@ -7,6 +7,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import requests
 from dotenv import dotenv_values
@@ -33,6 +34,7 @@ NOTIFICATION_ENV_KEYS = (
     "WEBHOOK_QUERY_PARAMETERS",
     "WEBHOOK_BODY",
 )
+DEFAULT_LIVE_DATABASE_URL = "mysql://root:123456@127.0.0.1:3306/fishradar_live?charset=utf8mb4"
 
 
 @dataclass(frozen=True)
@@ -87,15 +89,12 @@ def load_runtime_env(repo_root: Path) -> dict[str, str]:
 
 def build_ai_test_payload(runtime_env: dict[str, str]) -> dict[str, str]:
     payload = {
-        "OPENAI_BASE_URL": runtime_env.get("OPENAI_BASE_URL", ""),
-        "OPENAI_MODEL_NAME": runtime_env.get("OPENAI_MODEL_NAME", ""),
+        "base_url": runtime_env.get("OPENAI_BASE_URL", ""),
+        "model_name": runtime_env.get("OPENAI_MODEL_NAME", ""),
     }
     api_key = runtime_env.get("OPENAI_API_KEY")
     if api_key:
-        payload["OPENAI_API_KEY"] = api_key
-    proxy_url = runtime_env.get("PROXY_URL")
-    if proxy_url:
-        payload["PROXY_URL"] = proxy_url
+        payload["api_key"] = api_key
     return payload
 
 
@@ -152,6 +151,24 @@ def prepare_workspace(workspace: Path, settings: LiveTestSettings) -> Path:
     return account_target
 
 
+def build_live_database_url(workspace: Path, runtime_env: dict[str, str]) -> str:
+    raw_url = runtime_env.get("APP_DATABASE_URL") or os.getenv("TEST_MYSQL_URL") or DEFAULT_LIVE_DATABASE_URL
+    parsed = urlparse(raw_url)
+    base_database = parsed.path.lstrip("/") or "fishradar_live"
+    database_name = f"{base_database}_{workspace.name.replace('-', '_')}"
+    query = urlencode(dict(parse_qsl(parsed.query, keep_blank_values=True)) or {"charset": "utf8mb4"})
+    return urlunparse(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            f"/{database_name}",
+            "",
+            query,
+            "",
+        )
+    )
+
+
 def build_server_env(workspace: Path, repo_root: Path, port: int) -> dict[str, str]:
     env = load_runtime_env(repo_root)
     python_path_parts = [str(repo_root)]
@@ -160,7 +177,7 @@ def build_server_env(workspace: Path, repo_root: Path, port: int) -> dict[str, s
     debug_limit = str(os.getenv("LIVE_TEST_DEBUG_LIMIT", DEFAULT_LIVE_DEBUG_LIMIT)).strip()
     env.update(
         {
-            "APP_DATABASE_FILE": str(workspace / "data" / "live.sqlite3"),
+            "APP_DATABASE_URL": build_live_database_url(workspace, env),
             "ACCOUNT_STATE_DIR": str(workspace / "state"),
             "RUN_HEADLESS": "true",
             "SKIP_AI_ANALYSIS": "false",

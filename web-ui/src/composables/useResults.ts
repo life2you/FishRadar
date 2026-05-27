@@ -6,10 +6,12 @@ import * as resultsApi from '@/api/results'
 import type { GetResultContentParams } from '@/api/results'
 import { useWebSocket } from '@/composables/useWebSocket'
 import * as tasksApi from '@/api/tasks'
+import { useAuth } from '@/composables/useAuth'
 
 export function useResults() {
   const { t } = useI18n()
   const route = useRoute()
+  const { role } = useAuth()
   // State
   const files = ref<string[]>([])
   const selectedFile = ref<string | null>(null)
@@ -29,8 +31,8 @@ export function useResults() {
   
   const STORAGE_KEY_FILTERS = 'resultFilters'
 
-  function loadPersistedFilters(): Required<Omit<GetResultContentParams, 'page' | 'limit'>> {
-    const defaults: Required<Omit<GetResultContentParams, 'page' | 'limit'>> = {
+  function loadPersistedFilters(): Required<Omit<GetResultContentParams, 'page' | 'limit' | 'tenant_id'>> {
+    const defaults: Required<Omit<GetResultContentParams, 'page' | 'limit' | 'tenant_id'>> = {
       recommended_only: false,
       ai_recommended_only: false,
       keyword_recommended_only: false,
@@ -45,11 +47,22 @@ export function useResults() {
     return defaults
   }
 
-  const filters = reactive<Required<Omit<GetResultContentParams, 'page' | 'limit'>>>(loadPersistedFilters())
+  const filters = reactive<Required<Omit<GetResultContentParams, 'page' | 'limit' | 'tenant_id'>>>(loadPersistedFilters())
 
   const isLoading = ref(false)
   const error = ref<Error | null>(null)
   const { on } = useWebSocket()
+  const adminTenantId = computed(() => {
+    if (role.value !== 'admin') {
+      return null
+    }
+    const raw = route.query.tenant_id
+    if (typeof raw !== 'string') {
+      return null
+    }
+    const parsed = Number(raw)
+    return Number.isFinite(parsed) ? parsed : null
+  })
 
   function normalizeKeyword(value: string) {
     return value.trim().toLowerCase().replace(/\s+/g, '_')
@@ -62,7 +75,7 @@ export function useResults() {
   // Methods
   async function fetchFiles() {
     try {
-      const fileList = await resultsApi.getResultFiles()
+      const fileList = await resultsApi.getResultFiles(adminTenantId.value)
       files.value = fileList
       // If a file is selected that no longer exists, reset it.
       // Otherwise, if nothing is selected, select the first file by default.
@@ -99,6 +112,7 @@ export function useResults() {
         ...filters,
         page: page.value,
         limit: limit.value,
+        tenant_id: adminTenantId.value ?? undefined,
       })
       results.value = data.items
       totalItems.value = data.total_items
@@ -118,7 +132,7 @@ export function useResults() {
     }
 
     try {
-      insights.value = await resultsApi.getResultInsights(selectedFile.value)
+      insights.value = await resultsApi.getResultInsights(selectedFile.value, adminTenantId.value ?? undefined)
     } catch (e) {
       if (e instanceof Error) error.value = e
       insights.value = null
@@ -132,7 +146,7 @@ export function useResults() {
     }
 
     try {
-      const data = await resultsApi.getResultBlacklistRules(selectedFile.value)
+      const data = await resultsApi.getResultBlacklistRules(selectedFile.value, adminTenantId.value ?? undefined)
       blacklistKeywords.value = data.keywords || []
     } catch (e) {
       if (e instanceof Error) error.value = e
@@ -142,7 +156,7 @@ export function useResults() {
 
   async function fetchTaskNameMap() {
     try {
-      const tasks = await tasksApi.getAllTasks()
+      const tasks = await tasksApi.getAllTasks(adminTenantId.value)
       const mapping: Record<string, string> = {}
       tasks.forEach((task) => {
         if (task.keyword) {
@@ -195,7 +209,10 @@ export function useResults() {
 
   function exportSelectedResults() {
     if (!selectedFile.value) return
-    resultsApi.downloadResultExport(selectedFile.value, { ...filters })
+    resultsApi.downloadResultExport(selectedFile.value, {
+      ...filters,
+      tenant_id: adminTenantId.value ?? undefined,
+    })
   }
 
   async function deleteSelectedFile(filename?: string) {
@@ -204,7 +221,7 @@ export function useResults() {
     isLoading.value = true
     error.value = null
     try {
-      await resultsApi.deleteResultFile(target)
+      await resultsApi.deleteResultFile(target, adminTenantId.value)
       if (selectedFile.value === target) {
         const lastSelected = localStorage.getItem('lastSelectedResultFile')
         if (lastSelected === target) {
@@ -226,7 +243,7 @@ export function useResults() {
     if (!itemId) return
     const newStatus = item._status === 'hidden' ? 'active' : 'hidden'
     try {
-      await resultsApi.updateItemStatus(selectedFile.value, itemId, newStatus)
+      await resultsApi.updateItemStatus(selectedFile.value, itemId, newStatus, adminTenantId.value ?? undefined)
       await fetchResults()
     } catch (e) {
       if (e instanceof Error) error.value = e
@@ -238,7 +255,11 @@ export function useResults() {
     isSavingBlacklist.value = true
     error.value = null
     try {
-      const data = await resultsApi.updateResultBlacklistRules(selectedFile.value, keywords)
+      const data = await resultsApi.updateResultBlacklistRules(
+        selectedFile.value,
+        keywords,
+        adminTenantId.value ?? undefined,
+      )
       blacklistKeywords.value = data.keywords || []
       await fetchResults()
       await fetchInsights()
@@ -247,6 +268,26 @@ export function useResults() {
       throw e
     } finally {
       isSavingBlacklist.value = false
+    }
+  }
+
+  async function reanalyzeSelectedResults() {
+    if (!selectedFile.value) return null
+    isLoading.value = true
+    error.value = null
+    try {
+      const payload = await resultsApi.reanalyzeResultFile(
+        selectedFile.value,
+        adminTenantId.value ?? undefined,
+      )
+      await fetchResults()
+      await fetchInsights()
+      return payload
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isLoading.value = false
     }
   }
 
@@ -272,6 +313,10 @@ export function useResults() {
     },
     { immediate: true }
   )
+  watch(() => route.query.tenant_id, () => {
+    fetchFiles()
+    fetchTaskNameMap()
+  })
 
   const fileOptions = computed(() =>
     files.value.map((file) => {
@@ -306,6 +351,7 @@ export function useResults() {
     refreshResults,
     exportSelectedResults,
     deleteSelectedFile,
+    reanalyzeSelectedResults,
     toggleItemBlock,
     blacklistKeywords,
     isSavingBlacklist,

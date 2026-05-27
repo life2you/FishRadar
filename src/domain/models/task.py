@@ -110,6 +110,7 @@ class Task(BaseModel):
     model_config = ConfigDict(use_enum_values=True, extra="ignore")
 
     id: Optional[int] = None
+    tenant_id: Optional[int] = None
     task_name: str
     enabled: bool
     keyword: str
@@ -122,6 +123,9 @@ class Task(BaseModel):
     cron: Optional[str] = None
     ai_prompt_base_file: str
     ai_prompt_criteria_file: str
+    ai_prompt_base_text: Optional[str] = None
+    ai_prompt_criteria_text: Optional[str] = None
+    ai_prompt_text: Optional[str] = None
     account_state_file: Optional[str] = None
     account_strategy: Literal["auto", "fixed", "rotate"] = "auto"
     free_shipping: bool = True
@@ -160,6 +164,7 @@ class TaskCreate(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    tenant_id: Optional[int] = None
     task_name: str
     enabled: bool = True
     keyword: str
@@ -172,6 +177,9 @@ class TaskCreate(BaseModel):
     cron: Optional[str] = None
     ai_prompt_base_file: str = "prompts/base_prompt.txt"
     ai_prompt_criteria_file: str = ""
+    ai_prompt_base_text: Optional[str] = None
+    ai_prompt_criteria_text: Optional[str] = None
+    ai_prompt_text: Optional[str] = None
     account_state_file: Optional[str] = None
     account_strategy: Literal["auto", "fixed", "rotate"] = "auto"
     free_shipping: bool = True
@@ -227,6 +235,7 @@ class TaskUpdate(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    tenant_id: Optional[int] = None
     task_name: Optional[str] = None
     enabled: Optional[bool] = None
     keyword: Optional[str] = None
@@ -239,6 +248,9 @@ class TaskUpdate(BaseModel):
     cron: Optional[str] = None
     ai_prompt_base_file: Optional[str] = None
     ai_prompt_criteria_file: Optional[str] = None
+    ai_prompt_base_text: Optional[str] = None
+    ai_prompt_criteria_text: Optional[str] = None
+    ai_prompt_text: Optional[str] = None
     account_state_file: Optional[str] = None
     account_strategy: Optional[Literal["auto", "fixed", "rotate"]] = None
     free_shipping: Optional[bool] = None
@@ -294,6 +306,7 @@ class TaskGenerateRequest(BaseModel):
 
     model_config = ConfigDict(extra="ignore")
 
+    tenant_id: Optional[int] = None
     task_name: str
     keyword: str
     description: Optional[str] = ""

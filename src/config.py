@@ -1,99 +1,73 @@
+"""
+兼容层：保留旧模块导出，内部统一转向新的 settings 配置体系。
+"""
+from __future__ import annotations
+
 import os
 import sys
 
-from dotenv import load_dotenv
 from openai import AsyncOpenAI
 
-# --- AI & Notification Configuration ---
-load_dotenv()
+from src.infrastructure.config.settings import scraper_settings, settings
+from src.services.notification_config_service import load_notification_settings
+from src.services.platform_settings_service import load_ai_runtime_settings_sync
 
-# --- File Paths & Directories ---
-STATE_FILE = "xianyu_state.json"
-IMAGE_SAVE_DIR = "images"
-CONFIG_FILE = "config.json"
-os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
-# 任务隔离的临时图片目录前缀
-TASK_IMAGE_DIR_PREFIX = "task_images_"
+_ai_runtime = load_ai_runtime_settings_sync()
+_notification_settings = load_notification_settings()
 
-# --- API URL Patterns ---
+STATE_FILE = scraper_settings.state_file
+IMAGE_SAVE_DIR = settings.image_save_dir
+TASK_IMAGE_DIR_PREFIX = settings.task_image_dir_prefix
+
 API_URL_PATTERN = "h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search"
 DETAIL_API_URL_PATTERN = "h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail"
 
-# --- Environment Variables ---
-API_KEY = os.getenv("OPENAI_API_KEY")
-BASE_URL = os.getenv("OPENAI_BASE_URL")
-MODEL_NAME = os.getenv("OPENAI_MODEL_NAME")
-PROXY_URL = os.getenv("PROXY_URL")
-NTFY_TOPIC_URL = os.getenv("NTFY_TOPIC_URL")
-GOTIFY_URL = os.getenv("GOTIFY_URL")
-GOTIFY_TOKEN = os.getenv("GOTIFY_TOKEN")
-BARK_URL = os.getenv("BARK_URL")
-WX_BOT_URL = os.getenv("WX_BOT_URL")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-WEBHOOK_METHOD = os.getenv("WEBHOOK_METHOD", "POST").upper()
-WEBHOOK_HEADERS = os.getenv("WEBHOOK_HEADERS")
-WEBHOOK_CONTENT_TYPE = os.getenv("WEBHOOK_CONTENT_TYPE", "JSON").upper()
-WEBHOOK_QUERY_PARAMETERS = os.getenv("WEBHOOK_QUERY_PARAMETERS")
-WEBHOOK_BODY = os.getenv("WEBHOOK_BODY")
-PCURL_TO_MOBILE = os.getenv("PCURL_TO_MOBILE", "false").lower() == "true"
-RUN_HEADLESS = os.getenv("RUN_HEADLESS", "true").lower() != "false"
-LOGIN_IS_EDGE = os.getenv("LOGIN_IS_EDGE", "false").lower() == "true"
-RUNNING_IN_DOCKER = os.getenv("RUNNING_IN_DOCKER", "false").lower() == "true"
-AI_DEBUG_MODE = os.getenv("AI_DEBUG_MODE", "false").lower() == "true"
-SKIP_AI_ANALYSIS = os.getenv("SKIP_AI_ANALYSIS", "false").lower() == "true"
-ENABLE_THINKING = os.getenv("ENABLE_THINKING", "false").lower() == "true"
-ENABLE_RESPONSE_FORMAT = os.getenv("ENABLE_RESPONSE_FORMAT", "true").lower() == "true"
+PROXY_URL = _ai_runtime.proxy_url
+RUN_HEADLESS = scraper_settings.run_headless
+LOGIN_IS_EDGE = scraper_settings.login_is_edge
+RUNNING_IN_DOCKER = scraper_settings.running_in_docker
+AI_DEBUG_MODE = _ai_runtime.debug_mode
+SKIP_AI_ANALYSIS = _ai_runtime.skip_analysis
+ENABLE_THINKING = _ai_runtime.enable_thinking
+ENABLE_RESPONSE_FORMAT = _ai_runtime.enable_response_format
 
-# --- Headers ---
+NTFY_TOPIC_URL = _notification_settings.ntfy_topic_url
+GOTIFY_URL = _notification_settings.gotify_url
+GOTIFY_TOKEN = _notification_settings.gotify_token
+BARK_URL = _notification_settings.bark_url
+WX_BOT_URL = _notification_settings.wx_bot_url
+TELEGRAM_BOT_TOKEN = _notification_settings.telegram_bot_token
+TELEGRAM_CHAT_ID = _notification_settings.telegram_chat_id
+WEBHOOK_URL = _notification_settings.webhook_url
+WEBHOOK_METHOD = _notification_settings.webhook_method
+WEBHOOK_HEADERS = _notification_settings.webhook_headers
+WEBHOOK_CONTENT_TYPE = _notification_settings.webhook_content_type
+WEBHOOK_QUERY_PARAMETERS = _notification_settings.webhook_query_parameters
+WEBHOOK_BODY = _notification_settings.webhook_body
+PCURL_TO_MOBILE = _notification_settings.pcurl_to_mobile
+
 IMAGE_DOWNLOAD_HEADERS = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0',
-    'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
-    'Connection': 'keep-alive',
-    'Upgrade-Insecure-Requests': '1',
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
+    "Accept": "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
 }
 
-# --- Client Initialization ---
-# 检查配置是否齐全
-if not all([BASE_URL, MODEL_NAME]):
-    print("警告：未在 .env 文件中完整设置 OPENAI_BASE_URL 和 OPENAI_MODEL_NAME。AI相关功能可能无法使用。")
-    client = None
-else:
-    try:
-        if PROXY_URL:
-            print(f"正在为AI请求使用HTTP/S代理: {PROXY_URL}")
-            # httpx 会自动从环境变量中读取代理设置
-            os.environ['HTTP_PROXY'] = PROXY_URL
-            os.environ['HTTPS_PROXY'] = PROXY_URL
+os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
-        # openai 客户端内部的 httpx 会自动从环境变量中获取代理配置
-        client = AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
-    except Exception as e:
-        print(f"初始化 OpenAI 客户端时出错: {e}")
-        client = None
+if PROXY_URL:
+    os.environ["HTTP_PROXY"] = PROXY_URL
+    os.environ["HTTPS_PROXY"] = PROXY_URL
 
-# 检查AI客户端是否成功初始化
-if not client:
-    # 在 prompt_generator.py 中，如果 client 为 None，会直接报错退出
-    # 在 spider_v2.py 中，AI分析会跳过
-    # 为了保持一致性，这里只打印警告，具体逻辑由调用方处理
-    pass
+client: AsyncOpenAI | None = None
 
-# 检查关键配置
-if not all([BASE_URL, MODEL_NAME]) and 'prompt_generator.py' in sys.argv[0]:
-    sys.exit("错误：请确保在 .env 文件中完整设置了 OPENAI_BASE_URL 和 OPENAI_MODEL_NAME。(OPENAI_API_KEY 对于某些服务是可选的)")
 
 def get_ai_request_params(**kwargs):
-    """
-    构建AI请求参数，根据ENABLE_THINKING和ENABLE_RESPONSE_FORMAT环境变量决定是否添加相应参数
-    """
     if ENABLE_THINKING:
         kwargs["extra_body"] = {"enable_thinking": False}
-    
-    # 如果禁用结构化输出，则移除 text.format 配置
+
     if not ENABLE_RESPONSE_FORMAT and "text" in kwargs:
         text_config = kwargs.get("text")
         if isinstance(text_config, dict):
@@ -103,5 +77,4 @@ def get_ai_request_params(**kwargs):
                 kwargs["text"] = text_config
             else:
                 del kwargs["text"]
-    
     return kwargs

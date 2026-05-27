@@ -1,11 +1,8 @@
-import json
-import os
-import sys
 from typing import Awaitable, Callable, Optional
 
-import aiofiles
-
 from src.infrastructure.external.ai_client import AIClient
+from src.services.ai_account_service import list_ai_route_candidates
+from src.services.prompt_document_service import get_prompt_content
 
 # The meta-prompt to instruct the AI
 META_PROMPT_TEMPLATE = """
@@ -46,13 +43,10 @@ async def _report_progress(
 
 
 def _read_reference_text(reference_file_path: str) -> str:
-    try:
-        with open(reference_file_path, "r", encoding="utf-8") as file:
-            return file.read()
-    except FileNotFoundError:
-        raise FileNotFoundError(f"参考文件未找到: {reference_file_path}")
-    except IOError as exc:
-        raise IOError(f"读取参考文件失败: {exc}")
+    content = get_prompt_content(reference_file_path)
+    if content.strip():
+        return content
+    raise FileNotFoundError(f"参考文件未找到: {reference_file_path}")
 
 
 async def _request_generated_text(ai_client: AIClient, prompt: str) -> str:
@@ -70,6 +64,31 @@ async def _request_generated_text(ai_client: AIClient, prompt: str) -> str:
 
     print("AI已成功生成内容。")
     return generated_text.strip()
+
+
+async def _generate_text_with_candidates(prompt: str) -> str:
+    candidates = await list_ai_route_candidates(require_images=False)
+    if not candidates:
+        raise RuntimeError("没有可用的 AI 账号可用于生成分析标准。")
+
+    last_error: Exception | None = None
+    for account in candidates:
+        ai_client = AIClient(account if account.id != 0 else None)
+        active_error: BaseException | None = None
+        try:
+            if not ai_client.is_available():
+                ai_client.refresh()
+            if not ai_client.is_available():
+                continue
+            return await _request_generated_text(ai_client, prompt)
+        except Exception as exc:
+            active_error = exc
+            last_error = exc
+            print(f"账号 {account.name} 生成分析标准失败: {exc}")
+        finally:
+            await _close_ai_client(ai_client, active_error)
+
+    raise RuntimeError(f"所有 AI 账号生成分析标准均失败: {last_error}")
 
 
 async def _close_ai_client(
@@ -92,14 +111,7 @@ async def generate_criteria(
     """
     Generates a new criteria file content using AI.
     """
-    ai_client = AIClient()
-    active_error: BaseException | None = None
     try:
-        if not ai_client.is_available():
-            ai_client.refresh()
-        if not ai_client.is_available():
-            raise RuntimeError("AI客户端未初始化，无法生成分析标准。请检查.env配置。")
-
         await _report_progress(progress_callback, "reference", "正在读取参考文件。")
         print(f"正在读取参考文件: {reference_file_path}")
         reference_text = _read_reference_text(reference_file_path)
@@ -112,60 +124,6 @@ async def generate_criteria(
         )
 
         await _report_progress(progress_callback, "llm", "正在调用 AI 生成分析标准。")
-        return await _request_generated_text(ai_client, prompt)
+        return await _generate_text_with_candidates(prompt)
     except Exception as exc:
-        active_error = exc
         raise
-    finally:
-        await _close_ai_client(ai_client, active_error)
-
-
-async def update_config_with_new_task(new_task: dict, config_file: str = "config.json"):
-    """
-    将一个新任务添加到指定的JSON配置文件中。
-    """
-    print(f"正在更新配置文件: {config_file}")
-    try:
-        # 读取现有配置
-        config_data = []
-        if os.path.exists(config_file):
-            async with aiofiles.open(config_file, 'r', encoding='utf-8') as f:
-                content = await f.read()
-                # 处理空文件的情况
-                if content.strip():
-                    try:
-                        config_data = json.loads(content)
-                        print(f"成功读取现有配置，当前任务数量: {len(config_data)}")
-                    except json.JSONDecodeError as e:
-                        print(f"解析配置文件失败，将创建新配置: {e}")
-                        config_data = []
-        else:
-            print(f"配置文件不存在，将创建新文件: {config_file}")
-
-        # 追加新任务
-        config_data.append(new_task)
-
-        # 写回配置文件
-        async with aiofiles.open(config_file, 'w', encoding='utf-8') as f:
-            await f.write(json.dumps(config_data, ensure_ascii=False, indent=2))
-            print(f"配置文件写入完成")
-
-        print(f"成功！新任务 '{new_task.get('task_name')}' 已添加到 {config_file} 并已启用。")
-        return True
-    except json.JSONDecodeError as e:
-        error_msg = f"错误: 配置文件 {config_file} 格式错误，无法解析: {e}"
-        sys.stderr.write(error_msg + "\n")
-        print(error_msg)
-        return False
-    except IOError as e:
-        error_msg = f"错误: 读写配置文件失败: {e}"
-        sys.stderr.write(error_msg + "\n")
-        print(error_msg)
-        return False
-    except Exception as e:
-        error_msg = f"错误: 更新配置文件时发生未知错误: {e}"
-        sys.stderr.write(error_msg + "\n")
-        print(error_msg)
-        import traceback
-        print(traceback.format_exc())
-        return False

@@ -14,7 +14,7 @@ from src.keyword_rule_engine import build_search_text, evaluate_keyword_rules
 SellerLoader = Callable[[str], Awaitable[dict]]
 ImageDownloader = Callable[[str, list[str], str], Awaitable[list[str]]]
 AIAnalyzer = Callable[[dict, list[str], str], Awaitable[Optional[dict]]]
-Notifier = Callable[[dict, str], Awaitable[None]]
+Notifier = Callable[[dict, str, Optional[int]], Awaitable[None]]
 Saver = Callable[[dict, str], Awaitable[bool]]
 
 
@@ -30,6 +30,7 @@ class ItemAnalysisJob:
     seller_id: Optional[str]
     zhima_credit_text: Optional[str]
     registration_duration_text: str
+    tenant_id: Optional[int] = None
 
 
 class ItemAnalysisDispatcher:
@@ -76,7 +77,7 @@ class ItemAnalysisDispatcher:
         record["ai_analysis"] = await self._build_analysis_result(job, record)
         if await self._saver(record, job.keyword):
             self.completed_count += 1
-        await self._notify_if_recommended(item_data, record["ai_analysis"])
+        await self._notify_if_recommended(job, item_data, record["ai_analysis"])
 
     async def _load_seller_info(self, job: ItemAnalysisJob) -> dict:
         seller_info = {}
@@ -129,7 +130,7 @@ class ItemAnalysisDispatcher:
             ai_result = await self._ai_analyzer(record, image_paths, job.prompt_text)
             if not ai_result:
                 return self._build_ai_error_result(
-                    "AI analysis returned None after retries.",
+                    "AI 分析未返回有效结果，已自动重试。",
                     error="AI analysis returned None after retries.",
                 )
             ai_result.setdefault("analysis_source", "ai")
@@ -164,10 +165,19 @@ class ItemAnalysisDispatcher:
             except Exception as exc:
                 print(f"   [图片] 删除图片文件时出错: {exc}")
 
-    async def _notify_if_recommended(self, item_data: dict, analysis_result: dict) -> None:
+    async def _notify_if_recommended(
+        self,
+        job: ItemAnalysisJob,
+        item_data: dict,
+        analysis_result: dict,
+    ) -> None:
         if not analysis_result.get("is_recommended"):
             return
         try:
-            await self._notifier(item_data, analysis_result.get("reason", "无"))
+            await self._notifier(
+                item_data,
+                analysis_result.get("reason", "无"),
+                job.tenant_id,
+            )
         except Exception as exc:
             print(f"   [通知] 发送推荐通知失败: {exc}")

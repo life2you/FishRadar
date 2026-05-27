@@ -10,15 +10,21 @@ export interface GetResultContentParams {
   sort_order?: 'asc' | 'desc';
   page?: number;
   limit?: number;
+  tenant_id?: number;
 }
 
-export async function getResultFiles(): Promise<string[]> {
-  const data = await http('/api/results/files')
+export async function getResultFiles(tenantId?: number | null): Promise<string[]> {
+  const data = await http('/api/results/files', {
+    params: tenantId ? { tenant_id: tenantId } : undefined,
+  })
   return data.files || []
 }
 
-export async function deleteResultFile(filename: string): Promise<{ message: string }> {
-  return await http(`/api/results/files/${filename}`, { method: 'DELETE' })
+export async function deleteResultFile(filename: string, tenantId?: number | null): Promise<{ message: string }> {
+  return await http(`/api/results/files/${filename}`, {
+    method: 'DELETE',
+    params: tenantId ? { tenant_id: tenantId } : undefined,
+  })
 }
 
 export async function getResultContent(
@@ -28,17 +34,26 @@ export async function getResultContent(
   return await http(`/api/results/${filename}`, { params: params as Record<string, any> })
 }
 
-export async function getResultInsights(filename: string): Promise<ResultInsights> {
-  return await http(`/api/results/${filename}/insights`)
+export async function getResultInsights(filename: string, tenantId?: number): Promise<ResultInsights> {
+  return await http(`/api/results/${filename}/insights`, {
+    params: tenantId ? { tenant_id: tenantId } : undefined,
+  })
 }
 
-export async function getResultBlacklistRules(filename: string): Promise<{ keywords: string[] }> {
-  return await http(`/api/results/${filename}/blacklist-rules`)
+export async function getResultBlacklistRules(filename: string, tenantId?: number): Promise<{ keywords: string[] }> {
+  return await http(`/api/results/${filename}/blacklist-rules`, {
+    params: tenantId ? { tenant_id: tenantId } : undefined,
+  })
 }
 
-export async function updateResultBlacklistRules(filename: string, keywords: string[]): Promise<{ message: string; keywords: string[] }> {
+export async function updateResultBlacklistRules(
+  filename: string,
+  keywords: string[],
+  tenantId?: number,
+): Promise<{ message: string; keywords: string[] }> {
   return await http(`/api/results/${filename}/blacklist-rules`, {
     method: 'PUT',
+    params: tenantId ? { tenant_id: tenantId } : undefined,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ keywords }),
   })
@@ -65,10 +80,33 @@ export function downloadResultExport(filename: string, params: GetResultContentP
   document.body.removeChild(link)
 }
 
-export async function updateItemStatus(filename: string, itemId: string, status: string): Promise<{ message: string; status: string }> {
+export async function updateItemStatus(
+  filename: string,
+  itemId: string,
+  status: string,
+  tenantId?: number,
+): Promise<{ message: string; status: string }> {
   return await http(`/api/results/${filename}/items/${itemId}/status`, {
     method: 'PATCH',
+    params: tenantId ? { tenant_id: tenantId } : undefined,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ status }),
+  })
+}
+
+export async function reanalyzeResultFile(
+  filename: string,
+  tenantId?: number | null,
+): Promise<{
+  message: string
+  task_id: number | null
+  task_name: string
+  updated_count: number
+  failed_count: number
+  total_count: number
+}> {
+  return await http(`/api/results/${filename}/reanalyze`, {
+    method: 'POST',
+    params: tenantId ? { tenant_id: tenantId } : undefined,
   })
 }

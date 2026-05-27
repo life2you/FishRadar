@@ -1,5 +1,5 @@
 """
-基于 SQLite 的任务仓储实现。
+MySQL 任务仓储实现。
 """
 from __future__ import annotations
 
@@ -9,8 +9,8 @@ from typing import List, Optional
 
 from src.domain.models.task import Task
 from src.domain.repositories.task_repository import TaskRepository
-from src.infrastructure.persistence.sqlite_bootstrap import bootstrap_sqlite_storage
-from src.infrastructure.persistence.sqlite_connection import sqlite_connection
+from src.infrastructure.persistence.mysql_bootstrap import bootstrap_mysql_storage
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 
 
 def _row_to_task(row) -> Task:
@@ -25,8 +25,8 @@ def _row_to_task(row) -> Task:
 
 
 def find_task_by_name_sync(task_name: str) -> Task | None:
-    bootstrap_sqlite_storage()
-    with sqlite_connection() as conn:
+    bootstrap_mysql_storage()
+    with mysql_connection() as conn:
         row = conn.execute(
             "SELECT * FROM tasks WHERE task_name = ? ORDER BY id ASC LIMIT 1",
             (task_name,),
@@ -34,16 +34,22 @@ def find_task_by_name_sync(task_name: str) -> Task | None:
     return _row_to_task(row) if row else None
 
 
-class SqliteTaskRepository(TaskRepository):
-    """基于 SQLite 的任务仓储"""
+def find_task_by_id_sync(task_id: int) -> Task | None:
+    bootstrap_mysql_storage()
+    with mysql_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM tasks WHERE id = ? LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    return _row_to_task(row) if row else None
 
-    def __init__(
-        self,
-        db_path: str | None = None,
-        legacy_config_file: str | None = "config.json",
-    ):
-        self.db_path = db_path
-        self.legacy_config_file = legacy_config_file
+
+class MySQLTaskRepository(TaskRepository):
+    """基于 MySQL 的任务仓储。"""
+
+    def __init__(self, db_path: str | None = None):
+        if db_path is not None:
+            raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
 
     async def find_all(self) -> List[Task]:
         return await asyncio.to_thread(self._find_all_sync)
@@ -58,29 +64,20 @@ class SqliteTaskRepository(TaskRepository):
         return await asyncio.to_thread(self._delete_sync, task_id)
 
     def _find_all_sync(self) -> List[Task]:
-        bootstrap_sqlite_storage(
-            self.db_path,
-            legacy_config_file=self.legacy_config_file,
-        )
-        with sqlite_connection(self.db_path) as conn:
+        bootstrap_mysql_storage()
+        with mysql_connection() as conn:
             rows = conn.execute("SELECT * FROM tasks ORDER BY id ASC").fetchall()
         return [_row_to_task(row) for row in rows]
 
     def _find_by_id_sync(self, task_id: int) -> Optional[Task]:
-        bootstrap_sqlite_storage(
-            self.db_path,
-            legacy_config_file=self.legacy_config_file,
-        )
-        with sqlite_connection(self.db_path) as conn:
+        bootstrap_mysql_storage()
+        with mysql_connection() as conn:
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _row_to_task(row) if row else None
 
     def _save_sync(self, task: Task) -> Task:
-        bootstrap_sqlite_storage(
-            self.db_path,
-            legacy_config_file=self.legacy_config_file,
-        )
-        with sqlite_connection(self.db_path) as conn:
+        bootstrap_mysql_storage()
+        with mysql_connection() as conn:
             task_id = task.id
             if task_id is None:
                 task_id = self._next_task_id(conn)
@@ -88,15 +85,17 @@ class SqliteTaskRepository(TaskRepository):
             conn.execute(
                 """
                 INSERT OR REPLACE INTO tasks (
-                    id, task_name, enabled, keyword, description, analyze_images,
+                    id, tenant_id, task_name, enabled, keyword, description, analyze_images,
                     max_pages, personal_only, min_price, max_price, cron,
-                    ai_prompt_base_file, ai_prompt_criteria_file, account_state_file,
+                    ai_prompt_base_file, ai_prompt_criteria_file, ai_prompt_base_text,
+                    ai_prompt_criteria_text, ai_prompt_text, account_state_file,
                     account_strategy, free_shipping, new_publish_option, region,
                     decision_mode, keyword_rules_json, is_running
                 ) VALUES (
-                    :id, :task_name, :enabled, :keyword, :description, :analyze_images,
+                    :id, :tenant_id, :task_name, :enabled, :keyword, :description, :analyze_images,
                     :max_pages, :personal_only, :min_price, :max_price, :cron,
-                    :ai_prompt_base_file, :ai_prompt_criteria_file, :account_state_file,
+                    :ai_prompt_base_file, :ai_prompt_criteria_file, :ai_prompt_base_text,
+                    :ai_prompt_criteria_text, :ai_prompt_text, :account_state_file,
                     :account_strategy, :free_shipping, :new_publish_option, :region,
                     :decision_mode, :keyword_rules_json, :is_running
                 )
@@ -107,11 +106,8 @@ class SqliteTaskRepository(TaskRepository):
         return task.model_copy(update={"id": task_id})
 
     def _delete_sync(self, task_id: int) -> bool:
-        bootstrap_sqlite_storage(
-            self.db_path,
-            legacy_config_file=self.legacy_config_file,
-        )
-        with sqlite_connection(self.db_path) as conn:
+        bootstrap_mysql_storage()
+        with mysql_connection() as conn:
             cursor = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
             conn.commit()
         return cursor.rowcount > 0

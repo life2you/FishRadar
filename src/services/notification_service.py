@@ -9,6 +9,9 @@ from src.infrastructure.external.notification_clients.base import NotificationCl
 from src.infrastructure.external.notification_clients.factory import build_notification_clients
 from src.services.notification_config_service import load_notification_settings
 from src.infrastructure.config.settings import NotificationSettings
+from src.services.tenant_notification_settings_service import (
+    load_tenant_notification_settings_sync,
+)
 
 
 class NotificationService:
@@ -74,6 +77,28 @@ class NotificationService:
 
 def build_notification_service(
     settings: NotificationSettings | None = None,
+    *,
+    tenant_id: int | None = None,
 ) -> NotificationService:
-    notification_settings = settings or load_notification_settings()
+    if settings is not None:
+        notification_settings = settings
+    elif tenant_id is not None:
+        notification_settings = load_tenant_notification_settings_sync(tenant_id)
+    else:
+        notification_settings = load_notification_settings()
     return NotificationService(build_notification_clients(notification_settings))
+
+
+async def send_product_notification(
+    product_data: Dict,
+    reason: str,
+    tenant_id: int | None = None,
+) -> Dict[str, Dict[str, str | bool]]:
+    service = build_notification_service(tenant_id=tenant_id)
+    if not service.clients:
+        if tenant_id is None:
+            print("警告：当前未配置任何通知渠道，跳过通知。")
+        else:
+            print(f"警告：租户 {tenant_id} 未配置任何通知渠道，跳过通知。")
+        return {}
+    return await service.send_notification(product_data, reason)

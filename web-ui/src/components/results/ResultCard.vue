@@ -53,9 +53,9 @@ const expanded = ref(false)
 </script>
 
 <template>
-  <Card class="group flex flex-col h-full border-none shadow-glass hover:shadow-card-hover transition-all duration-300 rounded-2xl overflow-hidden bg-white/80 backdrop-blur-sm" :class="{ 'opacity-50': isHidden }">
+  <Card class="group flex flex-col h-full border-none shadow-glass hover:shadow-card-hover transition-all duration-300 rounded-xl overflow-hidden bg-white/80 backdrop-blur-sm" :class="{ 'opacity-50': isHidden }">
     <!-- Image Header -->
-    <div class="relative aspect-[4/3] overflow-hidden">
+    <div class="relative aspect-[5/4] overflow-hidden">
       <div class="absolute inset-0 bg-slate-200 animate-pulse" v-if="!imageUrl"></div>
       <img
         v-else
@@ -69,7 +69,7 @@ const expanded = ref(false)
         <span class="text-white/80 text-xs font-semibold uppercase tracking-wider">{{ hiddenLabel }}</span>
       </div>
       <!-- Overlays -->
-      <div class="absolute top-3 left-3 flex gap-2">
+      <div class="absolute top-2.5 left-2.5 flex gap-1.5">
         <Badge v-if="isRecommended && !isHidden" variant="default" class="bg-emerald-500/90 backdrop-blur-md border-none shadow-sm">
           {{ t('results.card.curated') }}
         </Badge>
@@ -77,7 +77,7 @@ const expanded = ref(false)
           {{ t('results.card.blacklisted') }}
         </Badge>
       </div>
-      <div class="absolute top-3 right-3 flex gap-1.5">
+      <div class="absolute top-2.5 right-2.5 flex gap-1">
         <button
           v-if="canToggleBlock"
           type="button"
@@ -100,24 +100,24 @@ const expanded = ref(false)
       </div>
     </div>
 
-    <CardHeader class="p-4 pb-2">
+    <CardHeader class="p-3 pb-1.5">
       <div class="flex justify-between items-start gap-3">
-        <CardTitle class="text-base font-semibold text-slate-800 line-clamp-2 leading-snug flex-grow h-10">
+        <CardTitle class="text-[0.95rem] font-semibold text-slate-800 line-clamp-2 leading-snug flex-grow h-9">
           <a :href="info.商品链接" target="_blank" rel="noopener noreferrer" class="hover:text-primary transition-colors">
             {{ info.商品标题 }}
           </a>
         </CardTitle>
       </div>
-      <div class="flex items-baseline gap-1 mt-2">
-        <span class="text-2xl font-bold text-rose-600 tracking-tight">{{ info.当前售价 }}</span>
+      <div class="flex items-baseline gap-1 mt-1.5">
+        <span class="text-[1.55rem] font-bold text-rose-600 tracking-tight">{{ info.当前售价 }}</span>
         <span v-if="info['商品原价']" class="text-xs text-slate-400 line-through mb-1">{{ info['商品原价'] }}</span>
       </div>
     </CardHeader>
 
-    <CardContent class="p-4 pt-2 flex-grow">
+    <CardContent class="p-3 pt-1.5 flex-grow">
       <!-- AI Insight Section -->
-      <div class="rounded-xl p-3 border border-slate-100" :class="recommendationStatus.bg">
-        <div class="flex items-center justify-between mb-2">
+      <div class="rounded-lg p-2.5 border border-slate-100" :class="recommendationStatus.bg">
+        <div class="flex items-center justify-between mb-1.5">
           <div class="flex items-center gap-2">
             <component :is="recommendationStatus.icon" class="w-4 h-4" :class="recommendationStatus.text" />
             <span class="text-sm font-bold" :class="recommendationStatus.text">{{ recommendationStatus.label }}</span>
@@ -128,7 +128,7 @@ const expanded = ref(false)
           </div>
         </div>
         
-        <div class="w-full h-1.5 bg-white/50 rounded-full overflow-hidden mb-3">
+        <div class="w-full h-1.5 bg-white/50 rounded-full overflow-hidden mb-2.5">
           <div 
             class="h-full transition-all duration-1000 ease-out rounded-full" 
             :class="recommendationStatus.color"
@@ -136,7 +136,7 @@ const expanded = ref(false)
           ></div>
         </div>
 
-        <p class="text-xs leading-relaxed text-slate-600" :class="{ 'line-clamp-2': !expanded }">
+        <p class="text-[11px] leading-5 text-slate-600" :class="{ 'line-clamp-2': !expanded }">
            {{ ai?.reason || t('results.card.analyzing') }}
         </p>
         
@@ -152,8 +152,8 @@ const expanded = ref(false)
       </div>
 
       <!-- Price Stats Grid -->
-      <div v-if="priceInsight?.observation_count" class="mt-4 grid grid-cols-2 gap-3">
-        <div class="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100/50 group/stat">
+      <div v-if="priceInsight?.observation_count" class="mt-3 grid grid-cols-2 gap-2">
+        <div class="bg-slate-50/50 p-2 rounded-lg border border-slate-100/50 group/stat">
           <div class="flex items-center gap-1.5 text-[10px] font-medium text-slate-400 mb-1">
             <TrendingUp class="w-3 h-3" /> {{ t('results.card.marketAvg') }}
           </div>
@@ -161,7 +161,7 @@ const expanded = ref(false)
             {{ priceInsight.market_avg_price ? `¥${priceInsight.market_avg_price}` : '—' }}
           </div>
         </div>
-        <div class="bg-slate-50/50 p-2.5 rounded-xl border border-slate-100/50">
+        <div class="bg-slate-50/50 p-2 rounded-lg border border-slate-100/50">
           <div class="flex items-center gap-1.5 text-[10px] font-medium text-slate-400 mb-1">
             <TrendingDown class="w-3 h-3" /> {{ t('results.card.historicalLow') }}
           </div>
@@ -172,7 +172,7 @@ const expanded = ref(false)
       </div>
     </CardContent>
 
-    <CardFooter class="px-4 py-3 bg-slate-50/30 border-t border-slate-100/60 flex items-center justify-between text-[10px]">
+    <CardFooter class="px-3 py-2 bg-slate-50/30 border-t border-slate-100/60 flex items-center justify-between text-[10px]">
       <div class="flex items-center gap-3 text-slate-400">
         <div class="flex items-center gap-1">
           <User class="w-3 h-3" />

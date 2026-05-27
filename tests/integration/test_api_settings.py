@@ -1,9 +1,13 @@
+import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+import pytest
 
 from src.api import dependencies as deps
 from src.api.routes import settings
+from src.domain.models.auth import AuthenticatedUser
 from src.infrastructure.config.env_manager import env_manager
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 
 
 _SETTINGS_ENV_KEYS = [
@@ -11,17 +15,21 @@ _SETTINGS_ENV_KEYS = [
     "ACCOUNT_ROTATION_MODE",
     "ACCOUNT_ROTATION_RETRY_LIMIT",
     "ACCOUNT_BLACKLIST_TTL",
-    "ACCOUNT_STATE_DIR",
     "PROXY_ROTATION_ENABLED",
     "PROXY_ROTATION_MODE",
     "PROXY_POOL",
     "PROXY_ROTATION_RETRY_LIMIT",
     "PROXY_BLACKLIST_TTL",
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-    "OPENAI_MODEL_NAME",
+    "AI_DEBUG_MODE",
+    "ENABLE_RESPONSE_FORMAT",
+    "ENABLE_THINKING",
     "SKIP_AI_ANALYSIS",
+    "AI_ANALYSIS_CONCURRENCY",
+    "SELLER_PROFILE_CACHE_TTL",
     "PROXY_URL",
+    "TASK_FAILURE_THRESHOLD",
+    "TASK_FAILURE_PAUSE_SECONDS",
+    "TASK_FAILURE_TZ",
     "NTFY_TOPIC_URL",
     "GOTIFY_URL",
     "GOTIFY_TOKEN",
@@ -49,7 +57,29 @@ def _build_settings_client() -> TestClient:
     app = FastAPI()
     app.include_router(settings.router)
     app.dependency_overrides[deps.get_process_service] = _IdleProcessService
+    async def _admin_user():
+        return AuthenticatedUser(
+            user_id=1,
+            username="admin",
+            role="admin",
+            tenant_id=1,
+            tenant_name="Platform Admin",
+            tenant_status="active",
+            tenant_ai_enabled=True,
+            tenant_activation_required=False,
+            tenant_activated_at="2026-01-01T00:00:00",
+        )
+    app.dependency_overrides[deps.require_admin_user] = _admin_user
     return TestClient(app)
+
+
+def _read_app_metadata_value(key: str) -> str | None:
+    with mysql_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_metadata WHERE `key` = ?",
+            (key,),
+        ).fetchone()
+    return None if row is None else row.get("value")
 
 
 def _clear_settings_env(monkeypatch) -> None:
@@ -57,7 +87,7 @@ def _clear_settings_env(monkeypatch) -> None:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch):
+def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -67,7 +97,6 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
                 "ACCOUNT_ROTATION_MODE=per_task",
                 "ACCOUNT_ROTATION_RETRY_LIMIT=2",
                 "ACCOUNT_BLACKLIST_TTL=300",
-                "ACCOUNT_STATE_DIR=state",
                 "PROXY_ROTATION_ENABLED=false",
                 "PROXY_ROTATION_MODE=per_task",
                 "PROXY_ROTATION_RETRY_LIMIT=2",
@@ -85,7 +114,6 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
     payload = response.json()
     assert payload["ACCOUNT_ROTATION_ENABLED"] is False
     assert payload["ACCOUNT_ROTATION_MODE"] == "per_task"
-    assert payload["ACCOUNT_STATE_DIR"] == "state"
 
     update_response = client.put(
         "/api/settings/rotation",
@@ -94,20 +122,23 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
             "ACCOUNT_ROTATION_MODE": "on_failure",
             "ACCOUNT_ROTATION_RETRY_LIMIT": 4,
             "ACCOUNT_BLACKLIST_TTL": 900,
-            "ACCOUNT_STATE_DIR": "accounts",
         },
     )
     assert update_response.status_code == 200
 
-    latest = env_file.read_text(encoding="utf-8")
-    assert "ACCOUNT_ROTATION_ENABLED=true" in latest
-    assert "ACCOUNT_ROTATION_MODE=on_failure" in latest
-    assert "ACCOUNT_ROTATION_RETRY_LIMIT=4" in latest
-    assert "ACCOUNT_BLACKLIST_TTL=900" in latest
-    assert "ACCOUNT_STATE_DIR=accounts" in latest
+    latest = client.get("/api/settings/rotation")
+    assert latest.status_code == 200
+    latest_payload = latest.json()
+    assert latest_payload["ACCOUNT_ROTATION_ENABLED"] is True
+    assert latest_payload["ACCOUNT_ROTATION_MODE"] == "on_failure"
+    assert latest_payload["ACCOUNT_ROTATION_RETRY_LIMIT"] == 4
+    assert latest_payload["ACCOUNT_BLACKLIST_TTL"] == 900
+    stored = json.loads(_read_app_metadata_value("platform:rotation_settings") or "{}")
+    assert stored["ACCOUNT_ROTATION_ENABLED"] is True
+    assert stored["ACCOUNT_ROTATION_MODE"] == "on_failure"
 
 
-def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path, monkeypatch):
+def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -154,7 +185,7 @@ def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path
     assert payload["WEBHOOK_BODY"] == '{"message":"{{content}}"}'
 
 
-def test_update_notification_settings_rejects_invalid_channel_config(tmp_path, monkeypatch):
+def test_update_notification_settings_rejects_invalid_channel_config(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
@@ -188,7 +219,7 @@ def test_update_notification_settings_rejects_invalid_channel_config(tmp_path, m
     assert "WEBHOOK_HEADERS" in webhook_response.text
 
 
-def test_system_status_includes_notification_channel_flags(tmp_path, monkeypatch):
+def test_system_status_includes_notification_channel_flags(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -223,7 +254,7 @@ def test_system_status_includes_notification_channel_flags(tmp_path, monkeypatch
     assert env_payload["webhook_url_set"] is True
 
 
-def test_notification_test_endpoint_merges_stored_secret_values(tmp_path, monkeypatch):
+def test_notification_test_endpoint_merges_stored_secret_values(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -274,7 +305,7 @@ def test_notification_test_endpoint_merges_stored_secret_values(tmp_path, monkey
     assert captured["json"]["chat_id"] == "20002"
 
 
-def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path, monkeypatch):
+def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -321,36 +352,8 @@ def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path,
     assert captured[0]["url"] == "https://ntfy.sh/demo-topic"
 
 
-def test_ai_settings_fall_back_to_runtime_environment_when_env_file_missing(tmp_path, monkeypatch):
-    _clear_settings_env(monkeypatch)
-    env_file = tmp_path / ".env"
-    monkeypatch.setattr(env_manager, "env_file", env_file)
-    monkeypatch.setenv("OPENAI_API_KEY", "runtime-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://runtime.example.com/v1")
-    monkeypatch.setenv("OPENAI_MODEL_NAME", "runtime-model")
-    monkeypatch.setenv("PROXY_URL", "http://127.0.0.1:7890")
-    client = _build_settings_client()
-
-    ai_response = client.get("/api/settings/ai")
-    assert ai_response.status_code == 200
-    assert ai_response.json() == {
-        "OPENAI_BASE_URL": "https://runtime.example.com/v1",
-        "OPENAI_MODEL_NAME": "runtime-model",
-        "SKIP_AI_ANALYSIS": False,
-        "PROXY_URL": "http://127.0.0.1:7890",
-    }
-
-    status_response = client.get("/api/settings/status")
-    assert status_response.status_code == 200
-    env_payload = status_response.json()["env_file"]
-    assert env_payload["exists"] is False
-    assert env_payload["openai_api_key_set"] is True
-    assert env_payload["openai_base_url_set"] is True
-    assert env_payload["openai_model_name_set"] is True
-
-
 def test_notification_settings_fall_back_to_runtime_environment_when_env_file_missing(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mysql_test_env
 ):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
@@ -373,67 +376,139 @@ def test_notification_settings_fall_back_to_runtime_environment_when_env_file_mi
     assert payload["BARK_URL_SET"] is True
     assert payload["TELEGRAM_BOT_TOKEN_SET"] is True
     assert sorted(payload["CONFIGURED_CHANNELS"]) == ["bark", "ntfy", "telegram"]
+    stored = json.loads(_read_app_metadata_value("platform:notification_settings") or "{}")
+    assert stored["NTFY_TOPIC_URL"] == "https://ntfy.sh/runtime-topic"
+    assert stored["TELEGRAM_CHAT_ID"] == "20001"
 
 
-def test_ai_test_endpoint_falls_back_to_responses_when_chat_completions_api_404(
-    tmp_path, monkeypatch
-):
-    _clear_settings_env(monkeypatch)
-    env_file = tmp_path / ".env"
-    env_file.write_text("", encoding="utf-8")
-    monkeypatch.setattr(env_manager, "env_file", env_file)
+def test_ai_runtime_settings_round_trip(mysql_test_env):
     client = _build_settings_client()
-    request_history = []
+
+    initial = client.get("/api/settings/ai-runtime")
+    assert initial.status_code == 200
+    assert initial.json()["ENABLE_RESPONSE_FORMAT"] is True
+
+    update = client.put(
+        "/api/settings/ai-runtime",
+        json={
+            "PROXY_URL": "http://127.0.0.1:7890",
+            "AI_DEBUG_MODE": True,
+            "ENABLE_THINKING": True,
+            "SKIP_AI_ANALYSIS": True,
+            "AI_ANALYSIS_CONCURRENCY": 4,
+            "SELLER_PROFILE_CACHE_TTL": 600,
+        },
+    )
+    assert update.status_code == 200
+
+    latest = client.get("/api/settings/ai-runtime")
+    assert latest.status_code == 200
+    payload = latest.json()
+    assert payload["PROXY_URL"] == "http://127.0.0.1:7890"
+    assert payload["AI_DEBUG_MODE"] is True
+    assert payload["ENABLE_THINKING"] is True
+    assert payload["SKIP_AI_ANALYSIS"] is True
+    assert payload["AI_ANALYSIS_CONCURRENCY"] == 4
+    assert payload["SELLER_PROFILE_CACHE_TTL"] == 600
+
+
+def test_failure_guard_settings_round_trip(mysql_test_env):
+    client = _build_settings_client()
+
+    update = client.put(
+        "/api/settings/failure-guard",
+        json={
+            "TASK_FAILURE_THRESHOLD": 5,
+            "TASK_FAILURE_PAUSE_SECONDS": 7200,
+            "TASK_FAILURE_TZ": "UTC",
+        },
+    )
+    assert update.status_code == 200
+
+    latest = client.get("/api/settings/failure-guard")
+    assert latest.status_code == 200
+    payload = latest.json()
+    assert payload["TASK_FAILURE_THRESHOLD"] == 5
+    assert payload["TASK_FAILURE_PAUSE_SECONDS"] == 7200
+    assert payload["TASK_FAILURE_TZ"] == "UTC"
+
+
+def test_ai_account_crud_round_trip(mysql_test_env):
+    client = _build_settings_client()
+
+    create_response = client.post(
+        "/api/settings/ai-accounts",
+        json={
+            "name": "图片主账号",
+            "api_key": "sk-demo",
+            "base_url": "https://example.com/v1",
+            "model_name": "demo-vision",
+            "supports_image": True,
+            "supports_text": False,
+            "enabled": True,
+            "priority": 10,
+            "notes": "只处理图片任务",
+        },
+    )
+    assert create_response.status_code == 200
+    created = create_response.json()["item"]
+    assert created["name"] == "图片主账号"
+    assert created["api_key"] == ""
+    assert created["api_key_set"] is True
+
+    list_response = client.get("/api/settings/ai-accounts")
+    assert list_response.status_code == 200
+    items = list_response.json()["items"]
+    assert len(items) == 1
+    assert items[0]["supports_image"] is True
+    assert items[0]["supports_text"] is False
+    assert items[0]["last_test_status"] is None
+
+    account_id = created["id"]
+    update_response = client.patch(
+        f"/api/settings/ai-accounts/{account_id}",
+        json={
+            "supports_text": True,
+            "priority": 5,
+        },
+    )
+    assert update_response.status_code == 200
+    updated = update_response.json()["item"]
+    assert updated["supports_text"] is True
+    assert updated["priority"] == 5
 
     class _FakeOpenAI:
-        def __init__(self, **_kwargs):
-            self.responses = type(
-                "_Responses",
-                (),
-                {"create": self._responses_create},
-            )()
-            self.chat = type(
-                "_Chat",
-                (),
-                {
-                    "completions": type(
-                        "_Completions",
-                        (),
-                        {"create": self._chat_create},
-                    )()
-                },
-            )()
+        def __init__(self, **kwargs):
+            self.responses = self
+            self.chat = type("_Chat", (), {"completions": self})()
 
-        def _responses_create(self, **kwargs):
-            request_history.append(("responses", kwargs))
+        def create(self, **kwargs):
+            if "messages" in kwargs:
+                raise Exception("Error code: 404 - page not found")
             return type(
                 "_Response",
                 (),
                 {"output_text": "OK"},
             )()
 
-        def _chat_create(self, **kwargs):
-            request_history.append(("chat", kwargs))
-            raise Exception("Error code: 404 - page not found")
-
     import openai
 
+    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
+    try:
+        test_response = client.post(f"/api/settings/ai-accounts/{account_id}/test")
+    finally:
+        monkeypatch.undo()
 
-    response = client.post(
-        "/api/settings/ai/test",
-        json={
-            "OPENAI_API_KEY": "demo",
-            "OPENAI_BASE_URL": "https://example.com/v1/",
-            "OPENAI_MODEL_NAME": "demo-model",
-        },
-    )
+    assert test_response.status_code == 200
+    tested = test_response.json()["item"]
+    assert tested["last_test_status"] == "success"
+    assert "测试成功" in tested["last_test_message"]
+    assert tested["last_tested_at"] is not None
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["success"] is True
-    assert payload["response"] == "OK"
-    assert request_history[0][0] == "chat"
-    assert request_history[0][1]["messages"][0]["content"] == settings.AI_TEST_PROMPT
-    assert request_history[1][0] == "responses"
-    assert request_history[1][1]["input"][0]["content"][0]["text"] == settings.AI_TEST_PROMPT
+    delete_response = client.delete(f"/api/settings/ai-accounts/{account_id}")
+    assert delete_response.status_code == 200
+
+    final_list = client.get("/api/settings/ai-accounts")
+    assert final_list.status_code == 200
+    assert final_list.json()["items"] == []

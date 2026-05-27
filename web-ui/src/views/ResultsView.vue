@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useAuth } from '@/composables/useAuth'
 import { useResults } from '@/composables/useResults'
 import ResultsFilterBar from '@/components/results/ResultsFilterBar.vue'
 import ResultsGrid from '@/components/results/ResultsGrid.vue'
 import ResultsInsightsPanel from '@/components/results/ResultsInsightsPanel.vue'
+import TenantPortalHero from '@/components/tenant/TenantPortalHero.vue'
+import CatchYuResultsToolbar from '@/components/tenant/CatchYuResultsToolbar.vue'
+import CatchYuResultsInsightsRail from '@/components/tenant/CatchYuResultsInsightsRail.vue'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { toast } from '@/components/ui/toast'
@@ -18,6 +23,8 @@ import {
 } from '@/components/ui/dialog'
 
 const { t } = useI18n()
+const { role, tenantName, username } = useAuth()
+const route = useRoute()
 
 const {
   files,
@@ -28,6 +35,7 @@ const {
   isLoading,
   error,
   refreshResults,
+  reanalyzeSelectedResults,
   exportSelectedResults,
   deleteSelectedFile,
   toggleItemBlock,
@@ -41,6 +49,13 @@ const {
 const isDeleteDialogOpen = ref(false)
 const isBlacklistDialogOpen = ref(false)
 const blacklistDraft = ref('')
+const isTenantPortal = computed(() => role.value === 'tenant')
+const tenantWorkspaceName = computed(() => tenantName.value || username.value || t('common.unnamed'))
+const adminTenantScopeLabel = computed(() => {
+  if (role.value !== 'admin') return null
+  const raw = route.query.tenant_id
+  return typeof raw === 'string' ? raw : null
+})
 
 const selectedTaskLabel = computed(() => {
   if (!selectedFile.value || fileOptions.value.length === 0) return null
@@ -48,12 +63,34 @@ const selectedTaskLabel = computed(() => {
   if (!match) return null
   return match.taskName || null
 })
+const selectedResultHeadline = computed(() => {
+  return selectedTaskLabel.value || (selectedFile.value ? selectedFile.value.replace('_full_data.jsonl', '') : '等待选择结果集')
+})
 
 const deleteConfirmText = computed(() => {
   return selectedTaskLabel.value
     ? t('results.filters.deleteDialogWithTask', { task: selectedTaskLabel.value })
     : t('results.filters.deleteDialogFallback')
 })
+const recommendedCount = computed(() => results.value.filter((item) => item.ai_analysis?.is_recommended).length)
+const hiddenCount = computed(() => results.value.filter((item) => item._effective_hidden).length)
+const tenantResultStats = computed(() => [
+  {
+    label: t('tenantPortal.results.stats.files'),
+    value: String(files.value.length),
+    detail: undefined,
+  },
+  {
+    label: t('tenantPortal.results.stats.items'),
+    value: String(results.value.length),
+    detail: undefined,
+  },
+  {
+    label: t('tenantPortal.results.stats.recommended'),
+    value: String(recommendedCount.value),
+    detail: undefined,
+  },
+])
 
 function openDeleteDialog() {
   if (!selectedFile.value) {
@@ -105,6 +142,33 @@ async function handleDeleteResults() {
   }
 }
 
+async function handleReanalyzeResults() {
+  if (!selectedFile.value) {
+    toast({
+      title: t('results.filters.noResultSelected'),
+      variant: 'destructive',
+    })
+    return
+  }
+  try {
+    const payload = await reanalyzeSelectedResults()
+    if (!payload) return
+    toast({
+      title: t('results.filters.reanalyzeDone'),
+      description: t('results.filters.reanalyzeDoneDescription', {
+        updated: payload.updated_count,
+        failed: payload.failed_count,
+      }),
+    })
+  } catch (e) {
+    toast({
+      title: t('results.filters.reanalyzeFailed'),
+      description: (e as Error).message,
+      variant: 'destructive',
+    })
+  }
+}
+
 function parseBlacklistKeywords(input: string) {
   return input
     .split(/[\n,，]+/)
@@ -129,35 +193,96 @@ async function handleSaveBlacklistRules() {
 
 <template>
   <div>
-    <h1 class="text-2xl font-bold text-gray-800 mb-6">
-      {{ t('results.title') }}
-    </h1>
+    <div v-if="isTenantPortal" class="space-y-6">
+      <TenantPortalHero
+        :eyebrow="t('tenantPortal.eyebrow')"
+        :title="t('tenantPortal.results.title', { tenant: tenantWorkspaceName })"
+        :description="t('tenantPortal.results.description')"
+        :stats="tenantResultStats"
+      />
 
-    <div v-if="error" class="app-alert-error mb-4" role="alert">
-      <strong class="font-bold">{{ t('common.error') }}</strong>
-      <span class="block sm:inline">{{ error.message }}</span>
+      <section class="space-y-4">
+        <div v-if="error" class="app-alert-error mb-4" role="alert">
+          <strong class="font-bold">{{ t('common.error') }}</strong>
+          <span class="block sm:inline">{{ error.message }}</span>
+        </div>
+
+        <CatchYuResultsToolbar
+          :files="files"
+          :file-options="fileOptions"
+          :is-ready="isFileOptionsReady"
+          v-model:selectedFile="selectedFile"
+          v-model:aiRecommendedOnly="filters.ai_recommended_only"
+          v-model:keywordRecommendedOnly="filters.keyword_recommended_only"
+          v-model:includeHidden="filters.include_hidden"
+          v-model:sortBy="filters.sort_by"
+          v-model:sortOrder="filters.sort_order"
+          :is-loading="isLoading"
+          @refresh="refreshResults"
+          @manage-blacklist="openBlacklistDialog"
+          @export="handleExportResults"
+          @delete="openDeleteDialog"
+        />
+
+        <section
+          v-if="selectedFile"
+          class="rounded-[16px] border border-[#d7e2db] bg-white/92 px-4 py-3 text-[13px] text-[#5f7869] shadow-sm"
+        >
+          <p class="text-[10px] font-bold uppercase tracking-[0.18em] text-[#7f988b]">当前结果集</p>
+          <h3 class="mt-1 text-[1rem] font-black tracking-[-0.02em] text-[#203228]">{{ selectedResultHeadline }}</h3>
+          <p class="mt-0.5 leading-5">共 {{ results.length }} 条记录，其中 {{ recommendedCount }} 条推荐，{{ hiddenCount }} 条已隐藏。</p>
+        </section>
+
+        <div class="space-y-4">
+          <ResultsGrid :results="results" :is-loading="isLoading" @toggle-block="toggleItemBlock" />
+          <CatchYuResultsInsightsRail
+            :insights="insights"
+            :selected-task-label="selectedTaskLabel"
+            :blacklist-keywords="blacklistKeywords"
+            :can-export="Boolean(selectedFile)"
+            :can-manage-blacklist="Boolean(selectedFile)"
+            @export="handleExportResults"
+            @manage-blacklist="openBlacklistDialog"
+          />
+        </div>
+      </section>
     </div>
 
-    <ResultsFilterBar
-      :files="files"
-      :file-options="fileOptions"
-      :is-ready="isFileOptionsReady"
-      v-model:selectedFile="selectedFile"
-      v-model:aiRecommendedOnly="filters.ai_recommended_only"
-      v-model:keywordRecommendedOnly="filters.keyword_recommended_only"
-      v-model:includeHidden="filters.include_hidden"
-      v-model:sortBy="filters.sort_by"
-      v-model:sortOrder="filters.sort_order"
-      :is-loading="isLoading"
-      @refresh="refreshResults"
-      @manage-blacklist="openBlacklistDialog"
-      @export="handleExportResults"
-      @delete="openDeleteDialog"
-    />
+    <template v-else>
+      <h1 class="text-2xl font-bold text-gray-800 mb-6">
+        {{ t('results.title') }}
+      </h1>
+      <div v-if="adminTenantScopeLabel" class="mb-4 rounded-2xl border border-sky-200 bg-sky-50 px-4 py-3 text-sm text-sky-700">
+        {{ t('tenantDetail.scopeHint', { id: adminTenantScopeLabel }) }}
+      </div>
 
-    <ResultsInsightsPanel :insights="insights" :selected-task-label="selectedTaskLabel" />
+      <div v-if="error" class="app-alert-error mb-4" role="alert">
+        <strong class="font-bold">{{ t('common.error') }}</strong>
+        <span class="block sm:inline">{{ error.message }}</span>
+      </div>
 
-    <ResultsGrid :results="results" :is-loading="isLoading" @toggle-block="toggleItemBlock" />
+      <ResultsFilterBar
+        :files="files"
+        :file-options="fileOptions"
+        :is-ready="isFileOptionsReady"
+        v-model:selectedFile="selectedFile"
+        v-model:aiRecommendedOnly="filters.ai_recommended_only"
+        v-model:keywordRecommendedOnly="filters.keyword_recommended_only"
+        v-model:includeHidden="filters.include_hidden"
+        v-model:sortBy="filters.sort_by"
+        v-model:sortOrder="filters.sort_order"
+        :is-loading="isLoading"
+        @refresh="refreshResults"
+        @reanalyze="handleReanalyzeResults"
+        @manage-blacklist="openBlacklistDialog"
+        @export="handleExportResults"
+        @delete="openDeleteDialog"
+      />
+
+      <ResultsInsightsPanel :insights="insights" :selected-task-label="selectedTaskLabel" />
+
+      <ResultsGrid :results="results" :is-loading="isLoading" @toggle-block="toggleItemBlock" />
+    </template>
 
     <Dialog v-model:open="isDeleteDialogOpen">
       <DialogContent class="sm:max-w-[420px]">
