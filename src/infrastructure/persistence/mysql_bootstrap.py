@@ -21,7 +21,10 @@ from src.services.account_state_service import (
     ensure_account_states_table,
     get_legacy_account_state_dir,
 )
-from src.services.auth_service import bootstrap_default_auth_data
+from src.services.auth_service import (
+    bootstrap_default_auth_data,
+    validate_admin_bootstrap_safety_sync,
+)
 from src.services.prompt_document_service import (
     PROMPT_SOURCE_SYSTEM,
 )
@@ -52,6 +55,7 @@ def bootstrap_mysql_storage(
             _import_results_if_needed(conn, legacy_result_dir)
             _import_price_snapshots_if_needed(conn, legacy_price_history_dir)
             _import_account_states_if_needed(conn)
+        validate_admin_bootstrap_safety_sync()
         bootstrap_default_auth_data()
 
 

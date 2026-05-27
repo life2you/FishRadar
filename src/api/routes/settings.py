@@ -256,6 +256,7 @@ async def get_tenant_access_settings(
 async def patch_tenant_access_settings(
     tenant_id: int,
     payload: TenantAccessUpdateModel,
+    process_service: ProcessService = Depends(get_process_service),
     _current_user: AuthenticatedUser = Depends(require_admin_user),
 ):
     try:
@@ -268,6 +269,8 @@ async def patch_tenant_access_settings(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not item.get("workspace_enabled", True):
+        await process_service.stop_tasks_for_tenant(tenant_id)
     return {"message": "租户权限已更新", "item": item}
 
 

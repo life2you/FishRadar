@@ -183,6 +183,34 @@ export interface SystemStatus {
   configured_notification_channels?: string[]
 }
 
+export type AnnouncementLevel = 'info' | 'success' | 'warning'
+export type AnnouncementStatus = 'draft' | 'active' | 'archived'
+
+export interface AnnouncementItem {
+  id: number
+  title: string
+  content: string
+  level: AnnouncementLevel
+  status: AnnouncementStatus
+  dismissible: boolean
+  published_at: string | null
+  expires_at: string | null
+  created_at: string
+  updated_at: string
+  created_by_user_id: number | null
+}
+
+export interface AnnouncementPayload {
+  title: string
+  content: string
+  level: AnnouncementLevel
+  status: AnnouncementStatus
+  dismissible: boolean
+  notify_tenants?: boolean
+  published_at?: string | null
+  expires_at?: string | null
+}
+
 export async function getNotificationSettings(): Promise<NotificationSettings> {
   return await http('/api/settings/notifications')
 }
@@ -245,6 +273,39 @@ export async function updateTenantNotificationChannels(
 
 export async function getRotationSettings(): Promise<RotationSettings> {
   return await http('/api/settings/rotation')
+}
+
+export async function getAnnouncements(): Promise<{ items: AnnouncementItem[] }> {
+  return await http('/api/announcements')
+}
+
+export async function getActiveAnnouncements(): Promise<{ items: AnnouncementItem[] }> {
+  return await http('/api/announcements/active')
+}
+
+export async function createAnnouncement(payload: AnnouncementPayload): Promise<{ message: string; item: AnnouncementItem }> {
+  return await http('/api/announcements', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function updateAnnouncement(
+  announcementId: number,
+  payload: Partial<AnnouncementPayload>,
+): Promise<{ message: string; item: AnnouncementItem }> {
+  return await http(`/api/announcements/${announcementId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+}
+
+export async function deleteAnnouncement(announcementId: number): Promise<{ message: string }> {
+  return await http(`/api/announcements/${announcementId}`, {
+    method: 'DELETE',
+  })
 }
 
 export async function updateRotationSettings(settings: RotationSettings): Promise<void> {

@@ -226,6 +226,29 @@ def _build_user_context(conn, user_row, *, session_token: str | None = None) -> 
     return _row_to_authenticated_user(row, session_token=session_token)  # type: ignore[arg-type]
 
 
+def count_users_sync() -> int:
+    with mysql_connection() as conn:
+        row = conn.execute("SELECT COUNT(1) AS total FROM users").fetchone()
+    return int(row["total"]) if row else 0
+
+
+def validate_admin_bootstrap_safety_sync() -> None:
+    if not app_settings.enforce_production_admin_bootstrap_safety:
+        return
+    if not app_settings.uses_default_admin_bootstrap_credentials:
+        return
+    user_count = count_users_sync()
+    if app_settings.is_production and user_count <= 0:
+        raise RuntimeError(
+            "生产环境禁止使用默认管理员初始账号启动空库，请先修改 WEB_USERNAME / WEB_PASSWORD。"
+        )
+    if app_settings.is_production:
+        print(
+            "[安全警告] 生产环境仍检测到默认 WEB_USERNAME / WEB_PASSWORD。"
+            " 当前数据库已存在用户，不会自动创建默认管理员，但仍建议尽快清理该默认值。"
+        )
+
+
 def authenticate_credentials_sync(username: str, password: str) -> Optional[AuthenticatedUser]:
     with mysql_connection() as conn:
         user_row = conn.execute(
@@ -472,6 +495,53 @@ def list_tenants_sync() -> list[dict]:
 
 async def list_tenants() -> list[dict]:
     return await asyncio.to_thread(list_tenants_sync)
+
+
+def get_tenant_workspace_status_sync(tenant_id: int) -> dict:
+    with mysql_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT status, activation_required, activated_at, access_expires_at
+            FROM tenants
+            WHERE id = ?
+            LIMIT 1
+            """,
+            (tenant_id,),
+        ).fetchone()
+        if row is None:
+            return {
+                "exists": False,
+                "status": "missing",
+                "access_expired": False,
+                "workspace_enabled": False,
+                "access_expires_at": None,
+            }
+
+    access_expires_at = (
+        str(row["access_expires_at"])
+        if _row_value(row, "access_expires_at") is not None
+        else None
+    )
+    expires_at = _parse_iso_dt(access_expires_at)
+    access_expired = expires_at is not None and expires_at <= _now_dt()
+    activation_required = _as_bool(_row_value(row, "activation_required"))
+    activated_at = str(row["activated_at"]) if _row_value(row, "activated_at") is not None else None
+    workspace_enabled = (
+        str(row["status"]) == "active"
+        and ((not activation_required) or bool(activated_at))
+        and not access_expired
+    )
+    return {
+        "exists": True,
+        "status": str(row["status"]),
+        "access_expired": access_expired,
+        "workspace_enabled": workspace_enabled,
+        "access_expires_at": access_expires_at,
+    }
+
+
+async def get_tenant_workspace_status(tenant_id: int) -> dict:
+    return await asyncio.to_thread(get_tenant_workspace_status_sync, tenant_id)
 
 
 def update_tenant_access_sync(

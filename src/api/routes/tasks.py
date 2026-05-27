@@ -26,6 +26,7 @@ from src.services.task_generation_runner import (
 )
 from src.services.task_payloads import serialize_task, serialize_tasks
 from src.domain.models.task import TaskCreate, TaskUpdate, TaskGenerateRequest
+from src.services.auth_service import get_tenant_workspace_status
 from src.prompt_utils import generate_criteria
 from src.utils import resolve_task_log_path
 from src.services.account_strategy_service import normalize_account_strategy
@@ -363,7 +364,11 @@ async def start_task(
         raise HTTPException(status_code=400, detail="任务已被禁用，无法启动")
     if task.is_running:
         raise HTTPException(status_code=400, detail="任务已在运行中")
-    success = await process_service.start_task(task_id, task.task_name)
+    if task.tenant_id is not None:
+        workspace_status = await get_tenant_workspace_status(task.tenant_id)
+        if not workspace_status.get("workspace_enabled", True):
+            raise HTTPException(status_code=400, detail="租户工作台已过期或已停用，无法启动任务")
+    success = await process_service.start_task(task_id, task.task_name, start_source="manual")
     if not success:
         raise HTTPException(status_code=500, detail="启动任务失败")
     return {"message": f"任务 '{task.task_name}' 已启动"}

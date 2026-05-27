@@ -4,7 +4,7 @@ import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { BellRing, Bot, ServerCog } from 'lucide-vue-next'
 import { useSettings } from '@/composables/useSettings'
-import type { AiAccountItem, AiAccountPayload, TenantNotificationChannel } from '@/api/settings'
+import type { AiAccountItem, AiAccountPayload, AnnouncementItem, AnnouncementLevel, AnnouncementStatus, TenantNotificationChannel } from '@/api/settings'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -30,8 +30,20 @@ type AiAccountFormState = {
   notes: string
 }
 
+type AnnouncementFormState = {
+  title: string
+  content: string
+  level: AnnouncementLevel
+  status: AnnouncementStatus
+  dismissible: boolean
+  notify_tenants: boolean
+  published_at: string
+  expires_at: string
+}
+
 const {
   tenantNotificationChannels,
+  announcements,
   aiAccounts,
   rotationSettings,
   systemStatus,
@@ -42,8 +54,11 @@ const {
   fetchAll,
   refreshStatus,
   saveTenantNotificationChannels,
+  createAnnouncement,
   createAiAccount,
+  updateAnnouncement,
   updateAiAccount,
+  deleteAnnouncement,
   deleteAiAccount,
   testAiAccount,
   testExistingAiAccount,
@@ -52,7 +67,7 @@ const {
 
 const activeTab = ref('ai')
 const route = useRoute()
-const validTabs = new Set(['notifications', 'ai', 'rotation', 'status', 'prompts'])
+const validTabs = new Set(['notifications', 'announcements', 'ai', 'rotation', 'status', 'prompts'])
 
 const promptFiles = ref<string[]>([])
 const selectedPrompt = ref<string | null>(null)
@@ -61,6 +76,7 @@ const isPromptLoading = ref(false)
 const isPromptSaving = ref(false)
 const promptError = ref<string | null>(null)
 const editingAiAccountId = ref<number | null>(null)
+const editingAnnouncementId = ref<number | null>(null)
 const aiAccountForm = ref<AiAccountFormState>({
   name: '',
   api_key: '',
@@ -72,8 +88,20 @@ const aiAccountForm = ref<AiAccountFormState>({
   priority: 100,
   notes: '',
 })
+const announcementForm = ref<AnnouncementFormState>({
+  title: '',
+  content: '',
+  level: 'info',
+  status: 'draft',
+  dismissible: true,
+  notify_tenants: false,
+  published_at: '',
+  expires_at: '',
+})
 const aiAccountFormTitle = computed(() => editingAiAccountId.value ? '编辑 AI 账号' : '新增 AI 账号')
+const announcementFormTitle = computed(() => editingAnnouncementId.value ? '编辑公告' : '发布公告')
 const activeAiAccountCount = computed(() => aiAccounts.value.filter((item) => item.enabled).length)
+const activeAnnouncementCount = computed(() => announcements.value.filter((item) => item.status === 'active').length)
 const settingsHeroCards = computed(() => [
   {
     icon: Bot,
@@ -88,6 +116,12 @@ const settingsHeroCards = computed(() => [
     detail: tenantNotificationChannels.value.length
       ? t('settings.tenantNotifications.summary', { count: tenantNotificationChannels.value.length })
       : t('settings.tenantNotifications.none'),
+  },
+  {
+    icon: BellRing,
+    label: '平台公告',
+    value: activeAnnouncementCount.value ? `${activeAnnouncementCount.value}` : t('common.empty'),
+    detail: activeAnnouncementCount.value ? `当前有 ${activeAnnouncementCount.value} 条生效公告` : '当前没有生效公告',
   },
   {
     icon: ServerCog,
@@ -140,6 +174,16 @@ function getAiUsageTone(item: AiAccountItem) {
   return 'border-slate-200 bg-slate-50 text-slate-500'
 }
 
+function getAnnouncementTone(level: AnnouncementLevel) {
+  if (level === 'success') {
+    return 'border-emerald-200 bg-emerald-50 text-emerald-700'
+  }
+  if (level === 'warning') {
+    return 'border-amber-200 bg-amber-50 text-amber-700'
+  }
+  return 'border-sky-200 bg-sky-50 text-sky-700'
+}
+
 function notifySuccess(title: string, description?: string) {
   toast({ title, description })
 }
@@ -172,6 +216,20 @@ function resetAiAccountForm() {
   }
 }
 
+function resetAnnouncementForm() {
+  editingAnnouncementId.value = null
+  announcementForm.value = {
+    title: '',
+    content: '',
+      level: 'info',
+      status: 'draft',
+      dismissible: true,
+      notify_tenants: false,
+      published_at: '',
+      expires_at: '',
+  }
+}
+
 function handleEditAiAccount(item: AiAccountItem) {
   editingAiAccountId.value = item.id
   aiAccountForm.value = {
@@ -184,6 +242,30 @@ function handleEditAiAccount(item: AiAccountItem) {
     enabled: item.enabled,
     priority: item.priority,
     notes: item.notes || '',
+  }
+}
+
+function toDateTimeLocalValue(value?: string | null) {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) {
+    return value.slice(0, 16)
+  }
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16)
+}
+
+function handleEditAnnouncement(item: AnnouncementItem) {
+  editingAnnouncementId.value = item.id
+  announcementForm.value = {
+    title: item.title,
+    content: item.content,
+    level: item.level,
+    status: item.status,
+    dismissible: item.dismissible,
+    notify_tenants: false,
+    published_at: toDateTimeLocalValue(item.published_at),
+    expires_at: toDateTimeLocalValue(item.expires_at),
   }
 }
 
@@ -228,6 +310,47 @@ async function handleDeleteAiAccount(item: AiAccountItem) {
     }
   } catch (e) {
     notifyError('删除AI账号失败', (e as Error).message)
+  }
+}
+
+async function handleSaveAnnouncement() {
+  try {
+    const payload = {
+      title: announcementForm.value.title.trim(),
+      content: announcementForm.value.content.trim(),
+      level: announcementForm.value.level,
+      status: announcementForm.value.status,
+      dismissible: announcementForm.value.dismissible,
+      notify_tenants: announcementForm.value.notify_tenants,
+      published_at: announcementForm.value.published_at || null,
+      expires_at: announcementForm.value.expires_at || null,
+    }
+    if (!payload.title || !payload.content) {
+      notifyError('公告内容不完整', '请填写标题和公告内容。')
+      return
+    }
+    if (editingAnnouncementId.value) {
+      await updateAnnouncement(editingAnnouncementId.value, payload)
+      notifySuccess('公告已更新')
+    } else {
+      await createAnnouncement(payload)
+      notifySuccess('公告已发布')
+    }
+    resetAnnouncementForm()
+  } catch (e) {
+    notifyError('保存公告失败', (e as Error).message)
+  }
+}
+
+async function handleDeleteAnnouncement(item: AnnouncementItem) {
+  try {
+    await deleteAnnouncement(item.id)
+    notifySuccess('公告已删除')
+    if (editingAnnouncementId.value === item.id) {
+      resetAnnouncementForm()
+    }
+  } catch (e) {
+    notifyError('删除公告失败', (e as Error).message)
   }
 }
 
@@ -399,6 +522,7 @@ onMounted(() => {
         <TabsTrigger class="shrink-0" value="ai">{{ t('settings.tabs.ai') }}</TabsTrigger>
         <TabsTrigger class="shrink-0" value="rotation">{{ t('settings.tabs.rotation') }}</TabsTrigger>
         <TabsTrigger class="shrink-0" value="notifications">{{ t('settings.tabs.notifications') }}</TabsTrigger>
+        <TabsTrigger class="shrink-0" value="announcements">平台公告</TabsTrigger>
         <TabsTrigger class="shrink-0" value="status">{{ t('settings.tabs.status') }}</TabsTrigger>
         <TabsTrigger class="shrink-0" value="prompts">{{ t('settings.tabs.prompts') }}</TabsTrigger>
       </TabsList>
@@ -577,6 +701,138 @@ onMounted(() => {
           :is-saving="isSaving"
           @save="handleSaveTenantNotificationChannels"
         />
+      </TabsContent>
+
+      <TabsContent value="announcements">
+        <Card>
+          <CardHeader>
+            <CardTitle>平台公告</CardTitle>
+            <CardDescription>向所有租户统一发布升级通知、维护提醒和临时说明。</CardDescription>
+          </CardHeader>
+          <CardContent class="space-y-5">
+            <div class="grid gap-3 md:grid-cols-3">
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">生效中公告</p>
+                <p class="mt-1 text-2xl font-black text-slate-900">{{ activeAnnouncementCount }}</p>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">草稿</p>
+                <p class="mt-1 text-2xl font-black text-slate-900">{{ announcements.filter((item) => item.status === 'draft').length }}</p>
+              </div>
+              <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+                <p class="text-xs font-semibold text-slate-500">可关闭公告</p>
+                <p class="mt-1 text-2xl font-black text-slate-900">{{ announcements.filter((item) => item.dismissible).length }}</p>
+              </div>
+            </div>
+
+            <div class="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+              <div class="space-y-3">
+                <div
+                  v-if="!announcements.length"
+                  class="rounded-2xl border border-dashed border-slate-200 bg-slate-50/80 px-4 py-6 text-sm text-slate-500"
+                >
+                  当前还没有平台公告，可以先发布一条升级说明。
+                </div>
+                <article
+                  v-for="item in announcements"
+                  :key="item.id"
+                  class="rounded-2xl border border-slate-200 bg-white px-4 py-4 shadow-sm"
+                >
+                  <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                    <div class="min-w-0">
+                      <div class="flex flex-wrap items-center gap-2">
+                        <h3 class="text-base font-black text-slate-900">{{ item.title }}</h3>
+                        <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="getAnnouncementTone(item.level)">
+                          {{ item.level === 'warning' ? '提醒' : item.level === 'success' ? '完成' : '通知' }}
+                        </span>
+                        <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="item.status === 'active' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : item.status === 'draft' ? 'border-slate-200 bg-slate-100 text-slate-600' : 'border-amber-200 bg-amber-50 text-amber-700'">
+                          {{ item.status === 'active' ? '生效中' : item.status === 'draft' ? '草稿' : '已归档' }}
+                        </span>
+                      </div>
+                      <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">{{ item.content }}</p>
+                      <div class="mt-3 flex flex-wrap gap-2 text-xs text-slate-500">
+                        <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">发布时间 {{ formatDateTime(item.published_at || item.updated_at) }}</span>
+                        <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">{{ item.expires_at ? `到期 ${formatDateTime(item.expires_at)}` : '长期有效' }}</span>
+                        <span class="rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1">{{ item.dismissible ? '租户可关闭' : '租户不可关闭' }}</span>
+                      </div>
+                    </div>
+                    <div class="flex shrink-0 flex-wrap gap-2">
+                      <Button variant="outline" size="sm" @click="handleEditAnnouncement(item)">编辑</Button>
+                      <Button variant="outline" size="sm" class="text-rose-600 hover:text-rose-700" @click="handleDeleteAnnouncement(item)">删除</Button>
+                    </div>
+                  </div>
+                </article>
+              </div>
+
+              <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 class="text-lg font-black text-slate-900">{{ announcementFormTitle }}</h3>
+                    <p class="mt-1 text-sm text-slate-500">租户登录后会在工作台顶部看到这里发布的公告。</p>
+                  </div>
+                  <Button variant="outline" size="sm" @click="resetAnnouncementForm">重置</Button>
+                </div>
+
+                <div class="mt-5 space-y-4">
+                  <div class="grid gap-2">
+                    <Label>公告标题</Label>
+                    <Input v-model="announcementForm.title" placeholder="例如：系统将于今晚 23:00 升级" />
+                  </div>
+                  <div class="grid gap-2">
+                    <Label>公告内容</Label>
+                    <Textarea v-model="announcementForm.content" rows="6" placeholder="填写面向租户的升级说明、影响范围和预计恢复时间。" />
+                  </div>
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <div class="grid gap-2">
+                      <Label>公告级别</Label>
+                      <Select :model-value="announcementForm.level" @update:model-value="(value) => announcementForm.level = value as AnnouncementLevel">
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="info">普通通知</SelectItem>
+                          <SelectItem value="success">完成提醒</SelectItem>
+                          <SelectItem value="warning">维护提醒</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div class="grid gap-2">
+                      <Label>公告状态</Label>
+                      <Select :model-value="announcementForm.status" @update:model-value="(value) => announcementForm.status = value as AnnouncementStatus">
+                        <SelectTrigger><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="draft">草稿</SelectItem>
+                          <SelectItem value="active">立即生效</SelectItem>
+                          <SelectItem value="archived">归档</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div class="grid gap-4 sm:grid-cols-2">
+                    <div class="grid gap-2">
+                      <Label>发布时间</Label>
+                      <Input v-model="announcementForm.published_at" type="datetime-local" />
+                    </div>
+                    <div class="grid gap-2">
+                      <Label>到期时间</Label>
+                      <Input v-model="announcementForm.expires_at" type="datetime-local" />
+                    </div>
+                  </div>
+                  <label class="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700">
+                    <input v-model="announcementForm.dismissible" type="checkbox" class="h-4 w-4" />
+                    允许租户在当前浏览器关闭这条公告
+                  </label>
+                  <label class="flex items-center gap-2 rounded-xl border border-slate-200 px-3 py-3 text-sm text-slate-700">
+                    <input v-model="announcementForm.notify_tenants" type="checkbox" class="h-4 w-4" />
+                    发布时同步推送到租户已配置的通知渠道
+                  </label>
+                </div>
+
+                <div class="mt-5 flex flex-wrap gap-2">
+                  <Button @click="handleSaveAnnouncement" :disabled="isSaving">{{ editingAnnouncementId ? '保存公告' : '发布公告' }}</Button>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
       </TabsContent>
 
       <!-- Status Tab -->

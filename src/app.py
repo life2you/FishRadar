@@ -15,6 +15,7 @@ from src.api.routes import (
     tasks,
     logs,
     settings,
+    announcements,
     tenant_settings,
     prompts,
     results,
@@ -35,6 +36,7 @@ from src.services.process_service import ProcessService
 from src.services.scheduler_service import SchedulerService
 from src.services.task_log_cleanup_service import cleanup_task_logs
 from src.services.task_generation_service import TaskGenerationService
+from src.services.login_rate_limiter import LoginRateLimiter
 from src.services.auth_service import (
     AUTH_SESSION_COOKIE,
     SESSION_TTL_DAYS,
@@ -53,6 +55,11 @@ from src.infrastructure.config.settings import settings as app_settings
 process_service = ProcessService()
 scheduler_service = SchedulerService(process_service)
 task_generation_service = TaskGenerationService()
+login_rate_limiter = LoginRateLimiter(
+    max_attempts=app_settings.login_rate_limit_max_attempts,
+    window_seconds=app_settings.login_rate_limit_window_seconds,
+    block_seconds=app_settings.login_rate_limit_block_seconds,
+)
 
 
 async def _sync_task_runtime_status(task_id: int, is_running: bool) -> None:
@@ -91,6 +98,7 @@ async def lifespan(app: FastAPI):
     task_repo = MySQLTaskRepository()
     task_service = TaskService(task_repo)
     tasks_list = await task_service.get_all_tasks()
+    manual_task_ids_to_restore = process_service.consume_manual_restart_task_ids()
 
     for task in tasks_list:
         if task.is_running:
@@ -99,6 +107,11 @@ async def lifespan(app: FastAPI):
     # 加载定时任务
     await scheduler_service.reload_jobs(tasks_list)
     scheduler_service.start()
+    process_service.start_background_tasks()
+    if manual_task_ids_to_restore:
+        restored_task_ids = await process_service.restore_manual_tasks(manual_task_ids_to_restore)
+        if restored_task_ids:
+            print(f"已恢复手动任务: {restored_task_ids}")
 
     print("应用启动完成")
 
@@ -106,7 +119,9 @@ async def lifespan(app: FastAPI):
 
     # 关闭时
     print("正在关闭应用...")
+    process_service.snapshot_manual_tasks_for_restart()
     scheduler_service.stop()
+    await process_service.stop_background_tasks()
     await process_service.stop_all()
     print("应用已关闭")
 
@@ -133,6 +148,7 @@ app.include_router(
     settings.router,
     dependencies=[Depends(require_admin_user)],
 )
+app.include_router(announcements.router)
 app.include_router(tenant_settings.router)
 app.include_router(
     prompts.router,
@@ -210,6 +226,7 @@ def _set_auth_cookie(response: Response, session_token: str) -> None:
         max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
         httponly=True,
         samesite="lax",
+        secure=app_settings.cookie_secure_enabled,
     )
 
 
@@ -218,24 +235,55 @@ def _clear_auth_cookie(response: Response) -> None:
         key=AUTH_SESSION_COOKIE,
         httponly=True,
         samesite="lax",
+        secure=app_settings.cookie_secure_enabled,
     )
 
 
+def _resolve_client_ip(request: Request) -> str:
+    forwarded_for = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded_for:
+        first = forwarded_for.split(",")[0].strip()
+        if first:
+            return first
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _enforce_login_rate_limit(request: Request) -> str:
+    client_ip = _resolve_client_ip(request)
+    decision = login_rate_limiter.evaluate(client_ip)
+    if decision.blocked:
+        raise HTTPException(
+            status_code=429,
+            detail=f"登录尝试过于频繁，请在 {decision.retry_after_seconds} 秒后重试",
+        )
+    return client_ip
+
+
 @app.post("/auth/login")
-async def login(payload: LoginRequest, response: Response):
+async def login(request: Request, payload: LoginRequest, response: Response):
     """执行用户名密码登录并写入会话 Cookie。"""
+    client_ip = _enforce_login_rate_limit(request)
     user = await authenticate_credentials(payload.username, payload.password)
     if user is None:
+        decision = login_rate_limiter.record_failure(client_ip)
+        if decision.blocked:
+            raise HTTPException(
+                status_code=429,
+                detail=f"登录尝试过于频繁，请在 {decision.retry_after_seconds} 秒后重试",
+            )
         raise HTTPException(status_code=401, detail="认证失败")
+    login_rate_limiter.record_success(client_ip)
     session_token = await create_session(user)
     _set_auth_cookie(response, session_token)
     return _auth_payload(user)
 
 
 @app.post("/auth/status")
-async def auth_status(payload: LoginRequest, response: Response):
+async def auth_status(request: Request, payload: LoginRequest, response: Response):
     """兼容旧前端路径，等价于登录接口。"""
-    return await login(payload, response)
+    return await login(request, payload, response)
 
 
 @app.post("/auth/register")

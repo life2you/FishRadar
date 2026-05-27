@@ -1,4 +1,10 @@
+import os
 import asyncio
+
+os.environ.setdefault(
+    "APP_DATABASE_URL",
+    "mysql://root:123456@host.docker.internal:3306/fishradar_feature_time_test?charset=utf8mb4",
+)
 
 import src.app as app_module
 
@@ -33,6 +39,27 @@ class _FakeSchedulerService:
 class _FakeProcessService:
     def __init__(self):
         self.stop_all_called = False
+        self.background_started = False
+        self.background_stopped = False
+        self.snapshot_called = False
+        self.restore_payload = None
+
+    def consume_manual_restart_task_ids(self):
+        return [2, 5]
+
+    async def restore_manual_tasks(self, task_ids):
+        self.restore_payload = list(task_ids)
+        return list(task_ids)
+
+    def start_background_tasks(self):
+        self.background_started = True
+
+    async def stop_background_tasks(self):
+        self.background_stopped = True
+
+    def snapshot_manual_tasks_for_restart(self):
+        self.snapshot_called = True
+        return [2, 5]
 
     async def stop_all(self):
         self.stop_all_called = True
@@ -64,5 +91,9 @@ def test_lifespan_cleans_task_logs_on_startup(monkeypatch):
 
     assert called["bootstrapped"] is True
     assert called["keep_days"] == 9
+    assert fake_process.restore_payload == [2, 5]
+    assert fake_process.background_started is True
+    assert fake_process.background_stopped is True
+    assert fake_process.snapshot_called is True
     assert fake_scheduler.stopped is True
     assert fake_process.stop_all_called is True

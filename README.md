@@ -145,6 +145,28 @@ docker compose down
 - 生产或长期环境建议固定自己的数据库与卷
 - 当前镜像已内置 Chromium
 
+### Docker + Nginx 反向代理
+
+如果你要部署到服务器，推荐使用 Docker 版 Nginx 做统一入口：
+
+```bash
+cp .env.example .env
+docker compose -f docker-compose.yaml -f docker-compose.nginx.yml up --build -d
+```
+
+此时：
+
+- `app` 只在容器网络内暴露 `8000`
+- 对外由 `nginx` 容器统一暴露 `80`
+- 反向代理配置在 [deploy/nginx/default.conf](/Users/life2you/vibeCodes/github/FishRadar/deploy/nginx/default.conf)
+- HTTPS 示例在 [deploy/nginx/default-ssl.conf.example](/Users/life2you/vibeCodes/github/FishRadar/deploy/nginx/default-ssl.conf.example)
+
+生产环境建议：
+
+- 将 `.env` 中 `APP_ENV=production`
+- 使用 HTTPS 证书，并把 `default.conf` 替换为 SSL 示例配置
+- 只开放 `80/443`，不要把应用容器的 `8000` 直接暴露到公网
+
 ## 第一次使用建议流程
 
 1. 启动服务并登录管理员后台

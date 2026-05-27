@@ -1,15 +1,79 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import TheHeader from '@/components/layout/TheHeader.vue'
 import TheSidebar from '@/components/layout/TheSidebar.vue'
 import { useAuth } from '@/composables/useAuth'
 import { useMobileNav } from '@/composables/useMobileNav'
+import { getActiveAnnouncements } from '@/api/settings'
+import type { AnnouncementItem } from '@/api/settings'
+import { Button } from '@/components/ui/button'
+import { X } from 'lucide-vue-next'
 
 const { isMobileNavOpen, closeMobileNav } = useMobileNav()
-const { role } = useAuth()
+const { role, workspaceEnabled } = useAuth()
 const { t } = useI18n()
 const isTenant = computed(() => role.value === 'tenant')
+const tenantAnnouncements = ref<AnnouncementItem[]>([])
+const dismissedAnnouncementKeys = ref<string[]>([])
+
+function announcementStorageKey(item: AnnouncementItem) {
+  return `tenant_announcement_dismissed:${item.id}:${item.updated_at}`
+}
+
+function loadDismissedAnnouncements() {
+  if (typeof window === 'undefined') return
+  const raw = localStorage.getItem('tenantDismissedAnnouncements')
+  dismissedAnnouncementKeys.value = raw ? JSON.parse(raw) : []
+}
+
+function persistDismissedAnnouncements() {
+  if (typeof window === 'undefined') return
+  localStorage.setItem('tenantDismissedAnnouncements', JSON.stringify(dismissedAnnouncementKeys.value))
+}
+
+function dismissAnnouncement(item: AnnouncementItem) {
+  const key = announcementStorageKey(item)
+  if (!dismissedAnnouncementKeys.value.includes(key)) {
+    dismissedAnnouncementKeys.value = [...dismissedAnnouncementKeys.value, key]
+    persistDismissedAnnouncements()
+  }
+}
+
+const visibleTenantAnnouncements = computed(() =>
+  tenantAnnouncements.value.filter((item) => !dismissedAnnouncementKeys.value.includes(announcementStorageKey(item))),
+)
+
+function getAnnouncementTone(level: string) {
+  if (level === 'success') {
+    return 'border-emerald-200 bg-emerald-50/90 text-emerald-800'
+  }
+  if (level === 'warning') {
+    return 'border-amber-200 bg-amber-50/92 text-amber-900'
+  }
+  return 'border-sky-200 bg-sky-50/92 text-sky-900'
+}
+
+async function loadTenantAnnouncements() {
+  if (!isTenant.value || !workspaceEnabled.value) {
+    tenantAnnouncements.value = []
+    return
+  }
+  try {
+    const response = await getActiveAnnouncements()
+    tenantAnnouncements.value = response.items
+  } catch {
+    tenantAnnouncements.value = []
+  }
+}
+
+watch([isTenant, workspaceEnabled], () => {
+  loadTenantAnnouncements()
+}, { immediate: true })
+
+onMounted(() => {
+  loadDismissedAnnouncements()
+})
 </script>
 
 <template>
@@ -36,6 +100,36 @@ const isTenant = computed(() => role.value === 'tenant')
 
     <main id="main-content" tabindex="-1" class="relative z-10 px-4 py-6 focus:outline-none md:px-8 md:py-10">
       <div class="mx-auto max-w-[1320px] animate-fade-in">
+        <div v-if="visibleTenantAnnouncements.length" class="mb-4 space-y-3">
+          <section
+            v-for="item in visibleTenantAnnouncements"
+            :key="item.id"
+            class="rounded-2xl border px-4 py-3 shadow-sm"
+            :class="getAnnouncementTone(item.level)"
+          >
+            <div class="flex items-start justify-between gap-4">
+              <div class="min-w-0">
+                <div class="flex flex-wrap items-center gap-2">
+                  <p class="text-[11px] font-black uppercase tracking-[0.18em] opacity-75">平台公告</p>
+                  <span class="rounded-full border border-current/15 bg-white/55 px-2 py-0.5 text-[11px] font-semibold">
+                    {{ item.level === 'warning' ? '维护提醒' : item.level === 'success' ? '完成通知' : '升级通知' }}
+                  </span>
+                </div>
+                <h2 class="mt-1 text-base font-black">{{ item.title }}</h2>
+                <p class="mt-1 whitespace-pre-wrap text-sm leading-6 opacity-90">{{ item.content }}</p>
+              </div>
+              <Button
+                v-if="item.dismissible"
+                variant="ghost"
+                size="icon"
+                class="h-8 w-8 shrink-0 rounded-full text-current hover:bg-white/55"
+                @click="dismissAnnouncement(item)"
+              >
+                <X class="h-4 w-4" />
+              </Button>
+            </div>
+          </section>
+        </div>
         <RouterView v-slot="{ Component }">
           <transition name="page" mode="out-in">
             <component :is="Component" />

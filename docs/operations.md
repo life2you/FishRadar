@@ -6,9 +6,24 @@ The recommended deployment model is:
 
 - one FastAPI app container
 - one MySQL 8 instance
+- one Nginx reverse-proxy container for public ingress
 - persistent volumes for logs and images
 
-`docker-compose.yaml` already reflects this shape.
+Recommended compose usage:
+
+```bash
+docker compose -f docker-compose.yaml -f docker-compose.nginx.yml up --build -d
+```
+
+Roles:
+
+- `docker-compose.yaml`: app + MySQL baseline
+- `docker-compose.nginx.yml`: reverse proxy overlay for server deployment
+
+Nginx configuration:
+
+- HTTP proxy: [deploy/nginx/default.conf](/Users/life2you/vibeCodes/github/FishRadar/deploy/nginx/default.conf)
+- HTTPS example: [deploy/nginx/default-ssl.conf.example](/Users/life2you/vibeCodes/github/FishRadar/deploy/nginx/default-ssl.conf.example)
 
 ## Required Startup Settings
 
@@ -21,11 +36,45 @@ These settings should still be managed through `.env`:
 - `RUN_HEADLESS`
 - `LOGIN_IS_EDGE`
 - `STATE_FILE`
+- `APP_ENV`
+- `AUTH_COOKIE_SECURE`
+- login rate limit bootstrap values
 
 Reason:
 
 - they affect process startup, browser channel selection, or bootstrap behavior
 - they are not tenant-level or business-level mutable settings
+
+`WEB_USERNAME` and `WEB_PASSWORD` should be treated as initial admin bootstrap credentials rather than long-term business configuration.
+
+## Security Baseline For Public Deployment
+
+Before exposing the system publicly, apply at least:
+
+- HTTPS via Nginx
+- `APP_ENV=production`
+- non-default `WEB_USERNAME` and `WEB_PASSWORD`
+- MySQL not exposed to the public internet
+- firewall allowing only `22/80/443` (or your chosen SSH port)
+
+Cookie behavior:
+
+- in production, auth cookies are emitted with `Secure`
+- if you stay on plain HTTP, browser login cookies will not behave correctly in production mode
+- use HTTPS when `APP_ENV=production`
+
+Login protection:
+
+- `/auth/login` and `/auth/status` are rate-limited by source IP
+- defaults are configurable through:
+  - `LOGIN_RATE_LIMIT_MAX_ATTEMPTS`
+  - `LOGIN_RATE_LIMIT_WINDOW_SECONDS`
+  - `LOGIN_RATE_LIMIT_BLOCK_SECONDS`
+
+Admin bootstrap protection:
+
+- production startup rejects an empty database when `WEB_USERNAME / WEB_PASSWORD` still use the default `admin / admin123`
+- this behavior is controlled by `ENFORCE_PRODUCTION_ADMIN_BOOTSTRAP_SAFETY`
 
 ## Business Settings Now Stored In MySQL
 
@@ -178,7 +227,6 @@ This remains startup-level behavior.
 Do not rely on these as primary runtime sources:
 
 - `config.json`
-- SQLite files
 - prompt text files
 - `state/` as the long-term source of login-state truth
 - one global `.env` AI provider account

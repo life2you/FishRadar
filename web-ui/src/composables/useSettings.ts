@@ -1,6 +1,8 @@
 import { ref, onMounted } from 'vue'
 import * as settingsApi from '@/api/settings'
 import type {
+  AnnouncementItem,
+  AnnouncementPayload,
   AiAccountItem,
   AiAccountPayload,
   RotationSettings,
@@ -10,6 +12,7 @@ import type {
 
 export function useSettings() {
   const tenantNotificationChannels = ref<TenantNotificationChannel[]>([])
+  const announcements = ref<AnnouncementItem[]>([])
   const aiAccounts = ref<AiAccountItem[]>([])
   const rotationSettings = ref<RotationSettings>({})
   const systemStatus = ref<SystemStatus | null>(null)
@@ -23,16 +26,18 @@ export function useSettings() {
     isLoading.value = true
     error.value = null
     try {
-      const [tenantChannels, aiAccountResponse, rotation, status] = await Promise.all([
+      const [tenantChannels, aiAccountResponse, rotation, status, announcementResponse] = await Promise.all([
         settingsApi.getTenantNotificationChannels(),
         settingsApi.getAiAccounts(),
         settingsApi.getRotationSettings(),
-        settingsApi.getSystemStatus()
+        settingsApi.getSystemStatus(),
+        settingsApi.getAnnouncements(),
       ])
       tenantNotificationChannels.value = tenantChannels.channels
       aiAccounts.value = aiAccountResponse.items
       rotationSettings.value = rotation
       systemStatus.value = status
+      announcements.value = announcementResponse.items
     } catch (e) {
       if (e instanceof Error) error.value = e
     } finally {
@@ -73,6 +78,10 @@ export function useSettings() {
 
   async function refreshAiAccounts() {
     aiAccounts.value = (await settingsApi.getAiAccounts()).items
+  }
+
+  async function refreshAnnouncements() {
+    announcements.value = (await settingsApi.getAnnouncements()).items
   }
 
   async function createAiAccount(payload: AiAccountPayload) {
@@ -160,10 +169,50 @@ export function useSettings() {
     }
   }
 
+  async function createAnnouncement(payload: AnnouncementPayload) {
+    isSaving.value = true
+    try {
+      await settingsApi.createAnnouncement(payload)
+      await refreshAnnouncements()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function updateAnnouncement(id: number, payload: Partial<AnnouncementPayload>) {
+    isSaving.value = true
+    try {
+      await settingsApi.updateAnnouncement(id, payload)
+      await refreshAnnouncements()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  async function deleteAnnouncement(id: number) {
+    isSaving.value = true
+    try {
+      await settingsApi.deleteAnnouncement(id)
+      await refreshAnnouncements()
+    } catch (e) {
+      if (e instanceof Error) error.value = e
+      throw e
+    } finally {
+      isSaving.value = false
+    }
+  }
+
   onMounted(fetchAll)
 
   return {
     tenantNotificationChannels,
+    announcements,
     aiAccounts,
     rotationSettings,
     systemStatus,
@@ -174,8 +223,11 @@ export function useSettings() {
     fetchAll,
     saveTenantNotificationChannels,
     createAiAccount,
+    createAnnouncement,
     updateAiAccount,
+    updateAnnouncement,
     deleteAiAccount,
+    deleteAnnouncement,
     testAiAccount,
     testExistingAiAccount,
     saveRotationSettings,

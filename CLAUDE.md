@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-基于 Playwright + AI 的闲鱼智能监控机器人。FastAPI 后端 + Vue 3 前端，支持多任务并发监控、多模态 AI 商品分析、多渠道通知推送。
+基于 Playwright + AI 的闲鱼监控与分析系统。FastAPI 后端 + Vue 3 前端，当前包含 `CatchYu` 租户端和 `CatchYu Console` 管理端，支持多租户任务监控、多 AI 账号路由、卡密激活、结果重分析和多渠道通知。
 
 ## 核心架构
 
@@ -59,7 +59,6 @@ docker compose up --build -d
 python spider_v2.py                          # 运行所有启用任务
 python spider_v2.py --task-name "MacBook"    # 运行指定任务
 python spider_v2.py --debug-limit 3          # 调试模式，限制商品数
-python spider_v2.py --config custom.json     # 自定义配置文件
 ```
 
 ## 测试
@@ -75,28 +74,34 @@ pytest tests/unit/test_utils.py::test_safe_get  # 运行单个测试函数
 
 ## 配置
 
-环境变量 (`.env`)：
-- AI 模型：`OPENAI_API_KEY`, `OPENAI_BASE_URL`, `OPENAI_MODEL_NAME`
-- 通知：`NTFY_TOPIC_URL`, `BARK_URL`, `WX_BOT_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`
-- 爬虫：`RUN_HEADLESS`, `LOGIN_IS_EDGE`
-- Web 认证：`WEB_USERNAME`, `WEB_PASSWORD`
-- 端口：`SERVER_PORT`
+环境变量 (`.env`) 现在主要只保留启动级配置：
+- 数据库：`APP_DATABASE_URL`
+- 服务启动：`SERVER_PORT`
+- 浏览器运行：`RUN_HEADLESS`, `LOGIN_IS_EDGE`, `STATE_FILE`
+- 首次管理员引导：`WEB_USERNAME`, `WEB_PASSWORD`
 
-任务配置 (`config.json`)：定义监控任务（关键词、价格范围、cron 表达式、AI prompt 文件等）
+业务级配置已迁入 MySQL，并应通过管理员后台维护：
+- AI 账号池与能力路由
+- 平台通知配置
+- 轮换配置
+- AI 运行参数
+- 失败熔断阈值
+- Prompt 文档与任务 Prompt 快照
 
 ## 数据流
 
-1. Web UI / config.json 创建任务
-2. SchedulerService 按 cron 触发或手动启动
-3. ProcessService 启动 spider_v2.py 子进程
-4. scraper.py 使用 Playwright 抓取商品
-5. AIAnalysisService 调用多模态模型分析
-6. NotificationService 推送符合条件的商品
-7. 结果存储：`jsonl/`（数据）、`images/`（图片）、`logs/`（日志）
+1. 管理端或租户端通过 Web UI 创建任务
+2. 任务和 Prompt 快照写入 MySQL
+3. SchedulerService 按 cron 触发或手动启动
+4. ProcessService 启动 `spider_v2.py` 子进程
+5. `scraper.py` 使用 Playwright 抓取商品
+6. `AIAnalysisService` 按任务模式与图片开关，从 AI 账号池中路由合适账号分析
+7. 结果写回 MySQL；`logs/` 和 `images/` 仅保留运行时产物
 
 ## 注意事项
 
-- AI 模型必须支持图片上传（多模态）
-- Docker 部署需通过 Web UI 手动更新登录状态（`state.json`）
+- 当前数据库只支持 MySQL
+- AI 任务的当前运行批次使用“启动时快照”，运行中编辑任务不会影响已启动的这轮任务
+- 登录态主数据已经入库，Docker 部署通过 Web UI 导入账号即可；`state/` 只是运行时兼容目录
 - 遇到滑动验证码时设置 `RUN_HEADLESS=false` 手动处理
 - 生产环境务必修改默认 Web 认证密码

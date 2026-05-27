@@ -90,9 +90,18 @@ class ScraperSettings(_EnvSettings):
 
 class AppSettings(_EnvSettings):
     """应用主配置"""
+    app_env: str = _env_field("development", "APP_ENV")
     server_port: int = _env_field(8000, "SERVER_PORT")
     web_username: str = _env_field("admin", "WEB_USERNAME")
     web_password: str = _env_field("admin123", "WEB_PASSWORD")
+    auth_cookie_secure: bool = _env_field(False, "AUTH_COOKIE_SECURE")
+    login_rate_limit_max_attempts: int = _env_field(8, "LOGIN_RATE_LIMIT_MAX_ATTEMPTS", ge=1)
+    login_rate_limit_window_seconds: int = _env_field(300, "LOGIN_RATE_LIMIT_WINDOW_SECONDS", ge=60)
+    login_rate_limit_block_seconds: int = _env_field(900, "LOGIN_RATE_LIMIT_BLOCK_SECONDS", ge=60)
+    enforce_production_admin_bootstrap_safety: bool = _env_field(
+        True,
+        "ENFORCE_PRODUCTION_ADMIN_BOOTSTRAP_SAFETY",
+    )
     task_log_retention_days: int = _env_field(7, "TASK_LOG_RETENTION_DAYS", ge=1)
 
     image_save_dir: str = "images"
@@ -102,6 +111,18 @@ class AppSettings(_EnvSettings):
         super().__init__(**kwargs)
         # 创建必要的目录
         os.makedirs(self.image_save_dir, exist_ok=True)
+
+    @property
+    def is_production(self) -> bool:
+        return str(self.app_env or "").strip().lower() in {"prod", "production"}
+
+    @property
+    def uses_default_admin_bootstrap_credentials(self) -> bool:
+        return self.web_username == "admin" and self.web_password == "admin123"
+
+    @property
+    def cookie_secure_enabled(self) -> bool:
+        return self.is_production or self.auth_cookie_secure
 
 
 # 全局配置实例（单例模式）

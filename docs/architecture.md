@@ -170,7 +170,6 @@ This is intentional to avoid mid-run drift.
 
 The following are no longer primary runtime dependencies:
 
-- `SQLite`
 - `config.json` task chain
 - runtime prompt files as the main source of truth
 - global `.env` AI provider fallback

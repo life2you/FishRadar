@@ -186,6 +186,21 @@ MYSQL_SCHEMA_STATEMENTS = (
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='租户通知配置表'
     """,
     """
+    CREATE TABLE IF NOT EXISTS announcements (
+        id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '公告ID',
+        title VARCHAR(255) NOT NULL COMMENT '公告标题',
+        content LONGTEXT NOT NULL COMMENT '公告内容',
+        level VARCHAR(32) NOT NULL DEFAULT 'info' COMMENT '公告级别',
+        status VARCHAR(32) NOT NULL DEFAULT 'draft' COMMENT '公告状态',
+        dismissible TINYINT(1) NOT NULL DEFAULT 1 COMMENT '租户端是否可关闭',
+        published_at VARCHAR(64) NULL COMMENT '发布时间',
+        expires_at VARCHAR(64) NULL COMMENT '过期时间',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+        updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+        created_by_user_id BIGINT NULL COMMENT '创建人用户ID'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='平台公告表'
+    """,
+    """
     CREATE TABLE IF NOT EXISTS ai_accounts (
         id BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT 'AI账号ID',
         name VARCHAR(255) NOT NULL COMMENT 'AI账号名称',
@@ -277,6 +292,11 @@ MYSQL_INDEX_DEFINITIONS = (
     ("idx_users_username", "users", "CREATE INDEX idx_users_username ON users(username)"),
     ("idx_auth_sessions_user_id", "auth_sessions", "CREATE INDEX idx_auth_sessions_user_id ON auth_sessions(user_id)"),
     ("idx_activation_codes_status", "activation_codes", "CREATE INDEX idx_activation_codes_status ON activation_codes(status)"),
+    (
+        "idx_announcements_status_publish",
+        "announcements",
+        "CREATE INDEX idx_announcements_status_publish ON announcements(status, published_at)",
+    ),
     ("idx_ai_accounts_enabled_priority", "ai_accounts", "CREATE INDEX idx_ai_accounts_enabled_priority ON ai_accounts(enabled, priority, id)"),
     (
         "idx_task_failure_guards_paused_until",
@@ -467,6 +487,21 @@ MYSQL_COMMENT_STATEMENTS = (
     MODIFY COLUMN settings_json LONGTEXT NOT NULL COMMENT '通知配置JSON',
     MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
     COMMENT = '租户通知配置表'
+    """,
+    """
+    ALTER TABLE announcements
+    MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT COMMENT '公告ID',
+    MODIFY COLUMN title VARCHAR(255) NOT NULL COMMENT '公告标题',
+    MODIFY COLUMN content LONGTEXT NOT NULL COMMENT '公告内容',
+    MODIFY COLUMN level VARCHAR(32) NOT NULL DEFAULT 'info' COMMENT '公告级别',
+    MODIFY COLUMN status VARCHAR(32) NOT NULL DEFAULT 'draft' COMMENT '公告状态',
+    MODIFY COLUMN dismissible TINYINT(1) NOT NULL DEFAULT 1 COMMENT '租户端是否可关闭',
+    MODIFY COLUMN published_at VARCHAR(64) NULL COMMENT '发布时间',
+    MODIFY COLUMN expires_at VARCHAR(64) NULL COMMENT '过期时间',
+    MODIFY COLUMN created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+    MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+    MODIFY COLUMN created_by_user_id BIGINT NULL COMMENT '创建人用户ID',
+    COMMENT = '平台公告表'
     """,
     """
     ALTER TABLE task_failure_guards
