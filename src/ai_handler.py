@@ -7,6 +7,7 @@ import os
 from datetime import datetime, timedelta
 
 from src.infrastructure.external.ai_client import AIClient
+from src.services.ai_account_service import list_ai_route_candidates
 from src.services.image_runtime_service import (
     DEFAULT_IMAGE_DOWNLOAD_CONCURRENCY,
     IMAGE_DOWNLOAD_HEADERS,
@@ -111,18 +112,22 @@ async def get_ai_analysis(product_data, image_paths=None, prompt_text=""):
         safe_print("   [AI分析] 错误：未提供AI分析所需的prompt文本。")
         return None
 
-    client = AIClient()
-    if not client.is_available():
-        safe_print("   [AI分析] 错误：AI客户端未初始化，跳过分析。")
+    candidates = await list_ai_route_candidates(require_images=bool(image_paths))
+    if not candidates:
+        safe_print("   [AI分析] 错误：当前没有可用的 AI 账号。")
         return None
-
-    try:
-        result = await client.analyze(product_data, image_paths or [], prompt_text)
-        if result and validate_ai_response_format(result):
-            return result
-        return None
-    finally:
-        await client.close()
+    for account in candidates:
+        client = AIClient(account)
+        if not client.is_available():
+            await client.close()
+            continue
+        try:
+            result = await client.analyze(product_data, image_paths or [], prompt_text)
+            if result and validate_ai_response_format(result):
+                return result
+        finally:
+            await client.close()
+    return None
 
 
 __all__ = [

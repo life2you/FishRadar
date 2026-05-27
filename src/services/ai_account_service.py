@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime
 
 from src.domain.models.ai_account import AIAccount, AIAccountCreate, AIAccountUpdate
-from src.infrastructure.config.settings import AISettings
 from src.infrastructure.persistence.mysql_connection import mysql_connection
 
 
@@ -49,26 +48,6 @@ def _row_to_account(row: dict) -> AIAccount:
         last_tested_at=row.get("last_tested_at"),
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),
-    )
-
-
-def _legacy_fallback_account() -> AIAccount | None:
-    settings = AISettings()
-    if not settings.is_configured():
-        return None
-    return AIAccount(
-        id=0,
-        name="默认环境配置",
-        api_key=settings.api_key,
-        base_url=settings.base_url,
-        model_name=settings.model_name,
-        supports_image=True,
-        supports_text=True,
-        enabled=True,
-        priority=9999,
-        notes="从 .env 读取的兼容回退配置",
-        created_at=None,
-        updated_at=None,
     )
 
 
@@ -247,27 +226,20 @@ def _supports_required_capability(account: AIAccount, *, require_images: bool) -
 
 
 async def list_ai_route_candidates(*, require_images: bool) -> list[AIAccount]:
-    accounts = [
+    return [
         account
         for account in await list_ai_accounts(include_disabled=False)
         if _supports_required_capability(account, require_images=require_images)
     ]
-    fallback = _legacy_fallback_account()
-    if fallback and _supports_required_capability(fallback, require_images=require_images):
-        accounts.append(fallback)
-    return accounts
 
 
 async def has_configured_ai_provider() -> bool:
     accounts = await list_ai_accounts(include_disabled=False)
-    if any(account.supports_text or account.supports_image for account in accounts):
-        return True
-    return _legacy_fallback_account() is not None
+    return any(account.supports_text or account.supports_image for account in accounts)
 
 
 def redact_ai_account(account: AIAccount) -> dict:
     payload = account.model_dump()
     payload["api_key"] = ""
     payload["api_key_set"] = bool(account.api_key)
-    payload["is_fallback"] = account.id == 0
     return payload

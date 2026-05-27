@@ -1,7 +1,6 @@
 """
 任务管理路由
 """
-import aiofiles
 import os
 from typing import List
 
@@ -33,6 +32,10 @@ from src.services.account_strategy_service import normalize_account_strategy
 from src.services.task_prompt_service import (
     build_criteria_generation_input,
     build_task_prompt_payload,
+)
+from src.services.prompt_document_service import (
+    PROMPT_SOURCE_GENERATED,
+    upsert_prompt_document,
 )
 from src.infrastructure.persistence.storage_names import build_result_filename
 from src.services.price_history_service import delete_price_snapshots
@@ -257,9 +260,11 @@ async def update_task(
                     print("AI 返回的内容为空")
                     raise HTTPException(status_code=500, detail="AI 未能生成分析标准，返回内容为空。")
                 print(f"保存新的分析标准到: {output_filename}")
-                os.makedirs("prompts", exist_ok=True)
-                async with aiofiles.open(output_filename, 'w', encoding='utf-8') as f:
-                    await f.write(generated_criteria)
+                upsert_prompt_document(
+                    output_filename,
+                    generated_criteria.strip(),
+                    source=PROMPT_SOURCE_GENERATED,
+                )
                 print(f"新的分析标准已保存")
                 prompt_payload = build_task_prompt_payload(
                     base_prompt_file=(

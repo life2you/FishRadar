@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from src.services.prompt_document_service import get_prompt_content
 
 
 CRITERIA_PLACEHOLDER = "{{CRITERIA_SECTION}}"
@@ -9,10 +9,7 @@ CRITERIA_PLACEHOLDER = "{{CRITERIA_SECTION}}"
 def read_prompt_file(path: str | None) -> str:
     if not path:
         return ""
-    file_path = Path(path)
-    if not file_path.exists():
-        return ""
-    return file_path.read_text(encoding="utf-8")
+    return get_prompt_content(path).strip()
 
 
 def compose_ai_prompt_text(base_prompt_text: str | None, criteria_text: str | None) -> str:

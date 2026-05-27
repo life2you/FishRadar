@@ -1,129 +1,122 @@
-# Multi-Tenant Portal Foundation
+# Multi-Tenant Portal Status
 
-## Goal
+This document no longer describes a “phase 1 foundation”.  
+It reflects the current multi-tenant state of the project.
 
-Build a tenant portal where tenant users can:
+## Current Product Split
+
+### Admin portal
+
+`CatchYu Console` is the platform-facing UI.
+
+Admins can:
+
+- view platform overview
+- manage tenants
+- generate and manage activation codes
+- control tenant AI entitlement
+- manage account-state pool
+- review logs
+- manage platform settings
+- review tenant-scoped tasks and results
+
+### Tenant portal
+
+`CatchYu` is the tenant-facing UI.
+
+Tenants can:
 
 - sign in with their own credentials
+- activate workspace access through activation codes
 - create and manage their own monitoring tasks
 - view only their own result pages
+- configure only the notification channels allowed by the platform
 
-Platform admins keep access to the existing full back office:
+## Current Isolation Model
+
+### Authentication
+
+- users are stored in MySQL
+- sessions are stored in MySQL
+- tenant membership is stored in MySQL
+
+### Data ownership
+
+The main business tables now carry tenant ownership where relevant:
+
+- tasks
+- result items
+- price snapshots
+
+Tenant-facing APIs filter data by `tenant_id`.
+
+### Realtime behavior
+
+Websocket messages are scoped so tenant-facing updates do not broadcast global platform data.
+
+## Access Rules
+
+### Admin
+
+Allowed areas:
 
 - dashboard
-- tasks
-- results
+- tenants
 - accounts
 - logs
 - settings
-- prompts
+- tenant-scoped task/result inspection
 
-## Phase 1 Scope
+### Tenant
 
-This branch starts the foundation layer and intentionally stops short of full tenant data isolation.
+Allowed areas:
 
-Included in phase 1:
-
-- database tables for tenants, users, memberships, and auth sessions
-- database-backed login with password hashing and session cookies
-- default admin bootstrap from existing `WEB_USERNAME` / `WEB_PASSWORD`
-- frontend role-aware auth state
-- frontend route and sidebar role filtering
-- task schema prepared for tenant ownership through `tenant_id`
-
-Deferred to phase 2:
-
-- task queries filtered by tenant end-to-end
-- result queries filtered by tenant end-to-end
-- websocket channel isolation by tenant
-- tenant user / tenant admin management UI
-- account / prompt / logs / images directory partitioning by tenant
-
-## Target Roles
-
-- `admin`
-  - full platform access
-- `tenant`
-  - dashboard, tasks, results only
-
-## Data Model
-
-### tenants
-
-- `id`
-- `name`
-- `slug`
-- `status`
-- `created_at`
-
-### users
-
-- `id`
-- `username`
-- `password_hash`
-- `role`
-- `status`
-- `display_name`
-- `created_at`
-
-### user_tenant_memberships
-
-- `id`
-- `user_id`
-- `tenant_id`
-- `membership_role`
-- `created_at`
-
-### auth_sessions
-
-- `session_token`
-- `user_id`
-- `tenant_id`
-- `expires_at`
-- `created_at`
-
-## Frontend Access Rules
-
-### admin
-
-- `/dashboard`
-- `/tasks`
-- `/accounts`
-- `/results`
-- `/logs`
-- `/settings`
-
-### tenant
-
-- `/dashboard`
-- `/tasks`
-- `/results`
-
-## Backend Access Rules
-
-### public
-
-- `POST /auth/status`
-- `GET /auth/me`
-- `POST /auth/logout`
-- `GET /health`
-
-### authenticated
-
-- dashboard
 - tasks
 - results
+- notifications
 
-### admin only
+If a tenant is not activated or has expired access, the tenant is limited to the activation flow.
 
-- accounts
-- logs
-- settings
-- prompts
-- login-state
+## Activation and Access
 
-## Notes
+Tenants can be controlled by:
 
-- Existing installations continue to work because startup bootstraps one admin user from env credentials.
-- Existing tasks and results currently remain global historical data until tenant ownership migration is completed.
-- New tenant isolation work should reuse the session and role plumbing introduced in this phase.
+- status
+- activation requirement
+- activation code duration
+- access expiry time
+- AI entitlement
+
+This makes it possible to operate the tenant portal as a gated SaaS-style workspace rather than a shared back office.
+
+## AI Entitlement
+
+Tenant AI capability is controlled by the admin side.
+
+If a tenant does not have AI access:
+
+- tenant task creation hides AI-only controls
+- AI mode is not available as a usable path
+- tasks remain limited to keyword-based strategies
+
+## Notification Entitlement
+
+The platform controls which notification channels tenants may use.
+
+Tenants can only configure channels that are globally opened for tenant usage.
+
+## Operational Outcome
+
+Compared with the earlier architecture, the system is now much closer to a real multi-tenant product:
+
+- separate tenant experience
+- separate admin experience
+- tenant data isolation
+- database-backed tenant/auth/session state
+- controllable tenant access lifecycle
+
+What still remains intentionally platform-level:
+
+- browser runtime behavior
+- startup environment variables
+- logs and image artifacts as filesystem runtime outputs

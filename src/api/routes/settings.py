@@ -3,17 +3,15 @@
 """
 import os
 import re
+import asyncio
 from typing import Optional
 
-from dotenv import load_dotenv
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from src.api.dependencies import get_process_service, require_admin_user
 from src.infrastructure.config.env_manager import env_manager
 from src.infrastructure.config.settings import (
-    AISettings,
-    reload_settings,
     scraper_settings,
 )
 from src.domain.models.ai_account import AIAccountCreate, AIAccountUpdate
@@ -33,6 +31,7 @@ from src.services.notification_config_service import (
     build_notification_status_flags,
     load_notification_settings,
     model_dump,
+    notification_settings_to_storage_payload,
     prepare_notification_test_settings,
     prepare_notification_settings_update,
 )
@@ -61,37 +60,20 @@ from src.services.ai_account_service import (
     update_ai_account,
 )
 from src.services.account_state_service import has_default_login_state_sync
+from src.services.platform_settings_service import (
+    load_ai_runtime_values_sync,
+    load_failure_guard_settings_sync,
+    load_rotation_settings_sync,
+    save_ai_runtime_values_sync,
+    save_failure_guard_settings_sync,
+    save_notification_config_values_sync,
+    save_rotation_settings_sync,
+)
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 AI_TEST_PROMPT = "Reply with OK only."
 AI_TEST_MAX_OUTPUT_TOKENS = 32
-
-
-def _reload_env() -> None:
-    load_dotenv(dotenv_path=env_manager.env_file, override=True)
-    reload_settings()
-
-
-def _env_bool(key: str, default: bool = False) -> bool:
-    value = env_manager.get_value(key)
-    if value is None:
-        return default
-    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
-
-
-def _env_int(key: str, default: int) -> int:
-    value = env_manager.get_value(key)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
-
-
-def _normalize_bool_value(value: bool) -> str:
-    return "true" if value else "false"
 
 
 def _compact_ai_test_error(exc: Exception) -> str:
@@ -133,16 +115,6 @@ class NotificationTestRequest(BaseModel):
     settings: NotificationSettingsModel = Field(default_factory=NotificationSettingsModel)
 
 
-class AISettingsModel(BaseModel):
-    """AI设置模型"""
-
-    OPENAI_API_KEY: Optional[str] = None
-    OPENAI_BASE_URL: Optional[str] = None
-    OPENAI_MODEL_NAME: Optional[str] = None
-    SKIP_AI_ANALYSIS: Optional[bool] = None
-    PROXY_URL: Optional[str] = None
-
-
 class AIAccountTestModel(BaseModel):
     api_key: Optional[str] = None
     base_url: str
@@ -159,6 +131,22 @@ class RotationSettingsModel(BaseModel):
     PROXY_POOL: Optional[str] = None
     PROXY_ROTATION_RETRY_LIMIT: Optional[int] = None
     PROXY_BLACKLIST_TTL: Optional[int] = None
+
+
+class AIRuntimeSettingsModel(BaseModel):
+    PROXY_URL: Optional[str] = None
+    AI_DEBUG_MODE: Optional[bool] = None
+    ENABLE_RESPONSE_FORMAT: Optional[bool] = None
+    ENABLE_THINKING: Optional[bool] = None
+    SKIP_AI_ANALYSIS: Optional[bool] = None
+    AI_ANALYSIS_CONCURRENCY: Optional[int] = Field(default=None, ge=1, le=32)
+    SELLER_PROFILE_CACHE_TTL: Optional[int] = Field(default=None, ge=0, le=86400)
+
+
+class FailureGuardSettingsModel(BaseModel):
+    TASK_FAILURE_THRESHOLD: Optional[int] = Field(default=None, ge=1, le=100)
+    TASK_FAILURE_PAUSE_SECONDS: Optional[int] = Field(default=None, ge=60, le=31536000)
+    TASK_FAILURE_TZ: Optional[str] = None
 
 
 class TenantAccessUpdateModel(BaseModel):
@@ -186,18 +174,17 @@ async def get_notification_settings():
 @router.put("/notifications")
 async def update_notification_settings(settings: NotificationSettingsModel):
     try:
-        updates, deletions, merged_settings = prepare_notification_settings_update(
+        _updates, _deletions, merged_settings = prepare_notification_settings_update(
             model_dump(settings, exclude_unset=True),
             load_notification_settings(),
         )
     except NotificationSettingsValidationError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    success = env_manager.apply_changes(updates=updates, deletions=deletions)
-    if not success:
-        raise HTTPException(status_code=500, detail="更新通知设置失败")
-
-    _reload_env()
+    await asyncio.to_thread(
+        save_notification_config_values_sync,
+        notification_settings_to_storage_payload(merged_settings),
+    )
     return {
         "message": "通知设置已成功更新",
         "configured_channels": build_configured_channels(merged_settings),
@@ -318,33 +305,38 @@ async def post_activation_codes(
 
 @router.get("/rotation")
 async def get_rotation_settings():
-    return {
-        "ACCOUNT_ROTATION_ENABLED": _env_bool("ACCOUNT_ROTATION_ENABLED", False),
-        "ACCOUNT_ROTATION_MODE": env_manager.get_value("ACCOUNT_ROTATION_MODE", "per_task"),
-        "ACCOUNT_ROTATION_RETRY_LIMIT": _env_int("ACCOUNT_ROTATION_RETRY_LIMIT", 2),
-        "ACCOUNT_BLACKLIST_TTL": _env_int("ACCOUNT_BLACKLIST_TTL", 300),
-        "PROXY_ROTATION_ENABLED": _env_bool("PROXY_ROTATION_ENABLED", False),
-        "PROXY_ROTATION_MODE": env_manager.get_value("PROXY_ROTATION_MODE", "per_task"),
-        "PROXY_POOL": env_manager.get_value("PROXY_POOL", ""),
-        "PROXY_ROTATION_RETRY_LIMIT": _env_int("PROXY_ROTATION_RETRY_LIMIT", 2),
-        "PROXY_BLACKLIST_TTL": _env_int("PROXY_BLACKLIST_TTL", 300),
-    }
+    return await asyncio.to_thread(load_rotation_settings_sync)
 
 
 @router.put("/rotation")
 async def update_rotation_settings(settings: RotationSettingsModel):
-    updates = {}
     payload = model_dump(settings, exclude_unset=True)
-    for key, value in payload.items():
-        if isinstance(value, bool):
-            updates[key] = _normalize_bool_value(value)
-        else:
-            updates[key] = str(value)
-    success = env_manager.update_values(updates)
-    if not success:
-        raise HTTPException(status_code=500, detail="更新轮换设置失败")
-    _reload_env()
+    await asyncio.to_thread(save_rotation_settings_sync, payload)
     return {"message": "轮换设置已成功更新"}
+
+
+@router.get("/ai-runtime")
+async def get_ai_runtime_settings():
+    return await asyncio.to_thread(load_ai_runtime_values_sync)
+
+
+@router.put("/ai-runtime")
+async def update_ai_runtime_settings(settings: AIRuntimeSettingsModel):
+    payload = model_dump(settings, exclude_unset=True)
+    await asyncio.to_thread(save_ai_runtime_values_sync, payload)
+    return {"message": "AI 运行参数已成功更新"}
+
+
+@router.get("/failure-guard")
+async def get_failure_guard_settings():
+    return await asyncio.to_thread(load_failure_guard_settings_sync)
+
+
+@router.put("/failure-guard")
+async def update_failure_guard_settings(settings: FailureGuardSettingsModel):
+    payload = model_dump(settings, exclude_unset=True)
+    await asyncio.to_thread(save_failure_guard_settings_sync, payload)
+    return {"message": "失败熔断设置已成功更新"}
 
 
 @router.get("/ai-accounts")
@@ -408,7 +400,7 @@ async def test_ai_account_settings(
             "OPENAI_API_KEY": settings.api_key or "",
             "OPENAI_BASE_URL": settings.base_url,
             "OPENAI_MODEL_NAME": settings.model_name,
-            "PROXY_URL": env_manager.get_value("PROXY_URL", ""),
+            "PROXY_URL": load_ai_runtime_values_sync().get("PROXY_URL", ""),
         }
     )
 
@@ -427,7 +419,7 @@ async def test_existing_ai_account(
             "OPENAI_API_KEY": account.api_key or "",
             "OPENAI_BASE_URL": account.base_url,
             "OPENAI_MODEL_NAME": account.model_name,
-            "PROXY_URL": env_manager.get_value("PROXY_URL", ""),
+            "PROXY_URL": load_ai_runtime_values_sync().get("PROXY_URL", ""),
         }
     )
     updated = await record_ai_account_test_result(
@@ -448,9 +440,6 @@ async def get_system_status(
     state_file = "xianyu_state.json"
     login_state_exists = has_default_login_state_sync()
     env_file_exists = os.path.exists(env_manager.env_file)
-    openai_api_key = env_manager.get_value("OPENAI_API_KEY", "")
-    openai_base_url = env_manager.get_value("OPENAI_BASE_URL", "")
-    openai_model_name = env_manager.get_value("OPENAI_MODEL_NAME", "")
     notification_settings = load_notification_settings()
     running_task_ids = [
         task_id
@@ -471,50 +460,11 @@ async def get_system_status(
         },
         "env_file": {
             "exists": env_file_exists,
-            "openai_api_key_set": bool(openai_api_key),
-            "openai_base_url_set": bool(openai_base_url),
-            "openai_model_name_set": bool(openai_model_name),
             **build_notification_status_flags(notification_settings),
         },
+        "failure_guard": load_failure_guard_settings_sync(),
         "configured_notification_channels": build_configured_channels(notification_settings),
     }
-
-
-@router.get("/ai")
-async def get_ai_settings():
-    return {
-        "OPENAI_BASE_URL": env_manager.get_value("OPENAI_BASE_URL", ""),
-        "OPENAI_MODEL_NAME": env_manager.get_value("OPENAI_MODEL_NAME", ""),
-        "SKIP_AI_ANALYSIS": env_manager.get_value("SKIP_AI_ANALYSIS", "false").lower() == "true",
-        "PROXY_URL": env_manager.get_value("PROXY_URL", ""),
-    }
-
-
-@router.put("/ai")
-async def update_ai_settings(settings: AISettingsModel):
-    updates = {}
-    if settings.OPENAI_API_KEY is not None:
-        updates["OPENAI_API_KEY"] = settings.OPENAI_API_KEY
-    if settings.OPENAI_BASE_URL is not None:
-        updates["OPENAI_BASE_URL"] = settings.OPENAI_BASE_URL
-    if settings.OPENAI_MODEL_NAME is not None:
-        updates["OPENAI_MODEL_NAME"] = settings.OPENAI_MODEL_NAME
-    if settings.SKIP_AI_ANALYSIS is not None:
-        updates["SKIP_AI_ANALYSIS"] = str(settings.SKIP_AI_ANALYSIS).lower()
-    if settings.PROXY_URL is not None:
-        updates["PROXY_URL"] = settings.PROXY_URL
-
-    success = env_manager.update_values(updates)
-    if not success:
-        raise HTTPException(status_code=500, detail="更新AI设置失败")
-    _reload_env()
-    return {"message": "AI设置已成功更新"}
-
-
-@router.post("/ai/test")
-async def test_ai_settings(settings: dict):
-    """测试AI模型设置是否有效"""
-    return await _run_ai_test(settings)
 
 
 async def _run_ai_test(settings: dict):
@@ -522,12 +472,8 @@ async def _run_ai_test(settings: dict):
         from openai import OpenAI
         import httpx
 
-        stored_api_key = env_manager.get_value("OPENAI_API_KEY", "")
-        submitted_api_key = settings.get("OPENAI_API_KEY", "")
-        api_key = submitted_api_key or stored_api_key
-
         client_params = {
-            "api_key": api_key,
+            "api_key": settings.get("OPENAI_API_KEY", ""),
             "base_url": settings.get("OPENAI_BASE_URL", ""),
             "timeout": httpx.Timeout(30.0),
         }

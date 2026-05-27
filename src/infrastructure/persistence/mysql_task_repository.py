@@ -47,14 +47,9 @@ def find_task_by_id_sync(task_id: int) -> Task | None:
 class MySQLTaskRepository(TaskRepository):
     """基于 MySQL 的任务仓储。"""
 
-    def __init__(
-        self,
-        db_path: str | None = None,
-        legacy_config_file: str | None = "config.json",
-    ):
+    def __init__(self, db_path: str | None = None):
         if db_path is not None:
             raise ValueError("db_path 已不再支持。当前版本仅支持 MySQL。")
-        self.legacy_config_file = legacy_config_file
 
     async def find_all(self) -> List[Task]:
         return await asyncio.to_thread(self._find_all_sync)
@@ -69,25 +64,19 @@ class MySQLTaskRepository(TaskRepository):
         return await asyncio.to_thread(self._delete_sync, task_id)
 
     def _find_all_sync(self) -> List[Task]:
-        bootstrap_mysql_storage(
-            legacy_config_file=self.legacy_config_file,
-        )
+        bootstrap_mysql_storage()
         with mysql_connection() as conn:
             rows = conn.execute("SELECT * FROM tasks ORDER BY id ASC").fetchall()
         return [_row_to_task(row) for row in rows]
 
     def _find_by_id_sync(self, task_id: int) -> Optional[Task]:
-        bootstrap_mysql_storage(
-            legacy_config_file=self.legacy_config_file,
-        )
+        bootstrap_mysql_storage()
         with mysql_connection() as conn:
             row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
         return _row_to_task(row) if row else None
 
     def _save_sync(self, task: Task) -> Task:
-        bootstrap_mysql_storage(
-            legacy_config_file=self.legacy_config_file,
-        )
+        bootstrap_mysql_storage()
         with mysql_connection() as conn:
             task_id = task.id
             if task_id is None:
@@ -117,9 +106,7 @@ class MySQLTaskRepository(TaskRepository):
         return task.model_copy(update={"id": task_id})
 
     def _delete_sync(self, task_id: int) -> bool:
-        bootstrap_mysql_storage(
-            legacy_config_file=self.legacy_config_file,
-        )
+        bootstrap_mysql_storage()
         with mysql_connection() as conn:
             cursor = conn.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
             conn.commit()

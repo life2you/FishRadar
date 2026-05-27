@@ -127,7 +127,6 @@ macOS 解决办法:
    brew install --cask microsoft-edge
 5) 配置文件（可选）:
    cp .env.example .env
-   cp config.json.example config.json
 EOF
 }
 
@@ -150,7 +149,6 @@ Linux (Debian/Ubuntu) 解决办法:
    sudo apt-get install -y microsoft-edge-stable
 5) 配置文件（可选）:
    cp .env.example .env
-   cp config.json.example config.json
 EOF
 }
 
@@ -171,7 +169,6 @@ Linux (RHEL/CentOS/Fedora) 解决办法:
    sudo dnf install -y microsoft-edge-stable
 5) 配置文件（可选）:
    cp .env.example .env
-   cp config.json.example config.json
 EOF
 }
 
@@ -192,7 +189,6 @@ Linux (Arch) 解决办法:
    yay -S microsoft-edge-stable
 5) 配置文件:
    cp .env.example .env
-   cp config.json.example config.json
 EOF
 }
 
@@ -214,7 +210,6 @@ WSL 解决办法:
    # 或在 Windows 安装 Chrome/Edge 并在 WSL 使用 Linux 版本浏览器
 5) 配置文件:
    cp .env.example .env
-   cp config.json.example config.json
 EOF
 }
 
@@ -233,7 +228,6 @@ Windows (PowerShell) 解决办法:
    winget install Microsoft.Edge
 4) 配置文件（可选）:
    Copy-Item .env.example .env
-   Copy-Item config.json.example config.json
 EOF
 }
 
@@ -248,7 +242,6 @@ print_solution_generic() {
 4) 安装浏览器 Chrome 或 Edge
 5) 配置文件（可选）:
    cp .env.example .env
-   cp config.json.example config.json
 EOF
 }
 

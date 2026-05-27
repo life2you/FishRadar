@@ -143,7 +143,7 @@ def test_live_preflight_smoke(live_server):
         ai_response = api_request(
             session,
             "post",
-            f"{live_server.base_url}/api/settings/ai/test",
+            f"{live_server.base_url}/api/settings/ai-accounts/test",
             json=live_server.settings.ai_test_payload,
         )
         assert ai_response.status_code == 200, ai_response.text

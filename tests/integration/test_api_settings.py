@@ -1,3 +1,4 @@
+import json
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 import pytest
@@ -6,6 +7,7 @@ from src.api import dependencies as deps
 from src.api.routes import settings
 from src.domain.models.auth import AuthenticatedUser
 from src.infrastructure.config.env_manager import env_manager
+from src.infrastructure.persistence.mysql_connection import mysql_connection
 
 
 _SETTINGS_ENV_KEYS = [
@@ -18,11 +20,16 @@ _SETTINGS_ENV_KEYS = [
     "PROXY_POOL",
     "PROXY_ROTATION_RETRY_LIMIT",
     "PROXY_BLACKLIST_TTL",
-    "OPENAI_API_KEY",
-    "OPENAI_BASE_URL",
-    "OPENAI_MODEL_NAME",
+    "AI_DEBUG_MODE",
+    "ENABLE_RESPONSE_FORMAT",
+    "ENABLE_THINKING",
     "SKIP_AI_ANALYSIS",
+    "AI_ANALYSIS_CONCURRENCY",
+    "SELLER_PROFILE_CACHE_TTL",
     "PROXY_URL",
+    "TASK_FAILURE_THRESHOLD",
+    "TASK_FAILURE_PAUSE_SECONDS",
+    "TASK_FAILURE_TZ",
     "NTFY_TOPIC_URL",
     "GOTIFY_URL",
     "GOTIFY_TOKEN",
@@ -66,12 +73,21 @@ def _build_settings_client() -> TestClient:
     return TestClient(app)
 
 
+def _read_app_metadata_value(key: str) -> str | None:
+    with mysql_connection() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_metadata WHERE `key` = ?",
+            (key,),
+        ).fetchone()
+    return None if row is None else row.get("value")
+
+
 def _clear_settings_env(monkeypatch) -> None:
     for key in _SETTINGS_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch):
+def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -110,14 +126,19 @@ def test_rotation_settings_include_account_rotation_fields(tmp_path, monkeypatch
     )
     assert update_response.status_code == 200
 
-    latest = env_file.read_text(encoding="utf-8")
-    assert "ACCOUNT_ROTATION_ENABLED=true" in latest
-    assert "ACCOUNT_ROTATION_MODE=on_failure" in latest
-    assert "ACCOUNT_ROTATION_RETRY_LIMIT=4" in latest
-    assert "ACCOUNT_BLACKLIST_TTL=900" in latest
+    latest = client.get("/api/settings/rotation")
+    assert latest.status_code == 200
+    latest_payload = latest.json()
+    assert latest_payload["ACCOUNT_ROTATION_ENABLED"] is True
+    assert latest_payload["ACCOUNT_ROTATION_MODE"] == "on_failure"
+    assert latest_payload["ACCOUNT_ROTATION_RETRY_LIMIT"] == 4
+    assert latest_payload["ACCOUNT_BLACKLIST_TTL"] == 900
+    stored = json.loads(_read_app_metadata_value("platform:rotation_settings") or "{}")
+    assert stored["ACCOUNT_ROTATION_ENABLED"] is True
+    assert stored["ACCOUNT_ROTATION_MODE"] == "on_failure"
 
 
-def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path, monkeypatch):
+def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -164,7 +185,7 @@ def test_notification_settings_redact_sensitive_values_and_expose_flags(tmp_path
     assert payload["WEBHOOK_BODY"] == '{"message":"{{content}}"}'
 
 
-def test_update_notification_settings_rejects_invalid_channel_config(tmp_path, monkeypatch):
+def test_update_notification_settings_rejects_invalid_channel_config(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text("", encoding="utf-8")
@@ -233,7 +254,7 @@ def test_system_status_includes_notification_channel_flags(tmp_path, monkeypatch
     assert env_payload["webhook_url_set"] is True
 
 
-def test_notification_test_endpoint_merges_stored_secret_values(tmp_path, monkeypatch):
+def test_notification_test_endpoint_merges_stored_secret_values(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -284,7 +305,7 @@ def test_notification_test_endpoint_merges_stored_secret_values(tmp_path, monkey
     assert captured["json"]["chat_id"] == "20002"
 
 
-def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path, monkeypatch):
+def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path, monkeypatch, mysql_test_env):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -331,36 +352,8 @@ def test_notification_test_endpoint_ignores_other_channel_dirty_fields(tmp_path,
     assert captured[0]["url"] == "https://ntfy.sh/demo-topic"
 
 
-def test_ai_settings_fall_back_to_runtime_environment_when_env_file_missing(tmp_path, monkeypatch, mysql_test_env):
-    _clear_settings_env(monkeypatch)
-    env_file = tmp_path / ".env"
-    monkeypatch.setattr(env_manager, "env_file", env_file)
-    monkeypatch.setenv("OPENAI_API_KEY", "runtime-key")
-    monkeypatch.setenv("OPENAI_BASE_URL", "https://runtime.example.com/v1")
-    monkeypatch.setenv("OPENAI_MODEL_NAME", "runtime-model")
-    monkeypatch.setenv("PROXY_URL", "http://127.0.0.1:7890")
-    client = _build_settings_client()
-
-    ai_response = client.get("/api/settings/ai")
-    assert ai_response.status_code == 200
-    assert ai_response.json() == {
-        "OPENAI_BASE_URL": "https://runtime.example.com/v1",
-        "OPENAI_MODEL_NAME": "runtime-model",
-        "SKIP_AI_ANALYSIS": False,
-        "PROXY_URL": "http://127.0.0.1:7890",
-    }
-
-    status_response = client.get("/api/settings/status")
-    assert status_response.status_code == 200
-    env_payload = status_response.json()["env_file"]
-    assert env_payload["exists"] is False
-    assert env_payload["openai_api_key_set"] is True
-    assert env_payload["openai_base_url_set"] is True
-    assert env_payload["openai_model_name_set"] is True
-
-
 def test_notification_settings_fall_back_to_runtime_environment_when_env_file_missing(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, mysql_test_env
 ):
     _clear_settings_env(monkeypatch)
     env_file = tmp_path / ".env"
@@ -383,70 +376,61 @@ def test_notification_settings_fall_back_to_runtime_environment_when_env_file_mi
     assert payload["BARK_URL_SET"] is True
     assert payload["TELEGRAM_BOT_TOKEN_SET"] is True
     assert sorted(payload["CONFIGURED_CHANNELS"]) == ["bark", "ntfy", "telegram"]
+    stored = json.loads(_read_app_metadata_value("platform:notification_settings") or "{}")
+    assert stored["NTFY_TOPIC_URL"] == "https://ntfy.sh/runtime-topic"
+    assert stored["TELEGRAM_CHAT_ID"] == "20001"
 
 
-def test_ai_test_endpoint_falls_back_to_responses_when_chat_completions_api_404(
-    tmp_path, monkeypatch
-):
-    _clear_settings_env(monkeypatch)
-    env_file = tmp_path / ".env"
-    env_file.write_text("", encoding="utf-8")
-    monkeypatch.setattr(env_manager, "env_file", env_file)
+def test_ai_runtime_settings_round_trip(mysql_test_env):
     client = _build_settings_client()
-    request_history = []
 
-    class _FakeOpenAI:
-        def __init__(self, **_kwargs):
-            self.responses = type(
-                "_Responses",
-                (),
-                {"create": self._responses_create},
-            )()
-            self.chat = type(
-                "_Chat",
-                (),
-                {
-                    "completions": type(
-                        "_Completions",
-                        (),
-                        {"create": self._chat_create},
-                    )()
-                },
-            )()
+    initial = client.get("/api/settings/ai-runtime")
+    assert initial.status_code == 200
+    assert initial.json()["ENABLE_RESPONSE_FORMAT"] is True
 
-        def _responses_create(self, **kwargs):
-            request_history.append(("responses", kwargs))
-            return type(
-                "_Response",
-                (),
-                {"output_text": "OK"},
-            )()
-
-        def _chat_create(self, **kwargs):
-            request_history.append(("chat", kwargs))
-            raise Exception("Error code: 404 - page not found")
-
-    import openai
-
-    monkeypatch.setattr(openai, "OpenAI", _FakeOpenAI)
-
-    response = client.post(
-        "/api/settings/ai/test",
+    update = client.put(
+        "/api/settings/ai-runtime",
         json={
-            "OPENAI_API_KEY": "demo",
-            "OPENAI_BASE_URL": "https://example.com/v1/",
-            "OPENAI_MODEL_NAME": "demo-model",
+            "PROXY_URL": "http://127.0.0.1:7890",
+            "AI_DEBUG_MODE": True,
+            "ENABLE_THINKING": True,
+            "SKIP_AI_ANALYSIS": True,
+            "AI_ANALYSIS_CONCURRENCY": 4,
+            "SELLER_PROFILE_CACHE_TTL": 600,
         },
     )
+    assert update.status_code == 200
 
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["success"] is True
-    assert payload["response"] == "OK"
-    assert request_history[0][0] == "chat"
-    assert request_history[0][1]["messages"][0]["content"] == settings.AI_TEST_PROMPT
-    assert request_history[1][0] == "responses"
-    assert request_history[1][1]["input"][0]["content"][0]["text"] == settings.AI_TEST_PROMPT
+    latest = client.get("/api/settings/ai-runtime")
+    assert latest.status_code == 200
+    payload = latest.json()
+    assert payload["PROXY_URL"] == "http://127.0.0.1:7890"
+    assert payload["AI_DEBUG_MODE"] is True
+    assert payload["ENABLE_THINKING"] is True
+    assert payload["SKIP_AI_ANALYSIS"] is True
+    assert payload["AI_ANALYSIS_CONCURRENCY"] == 4
+    assert payload["SELLER_PROFILE_CACHE_TTL"] == 600
+
+
+def test_failure_guard_settings_round_trip(mysql_test_env):
+    client = _build_settings_client()
+
+    update = client.put(
+        "/api/settings/failure-guard",
+        json={
+            "TASK_FAILURE_THRESHOLD": 5,
+            "TASK_FAILURE_PAUSE_SECONDS": 7200,
+            "TASK_FAILURE_TZ": "UTC",
+        },
+    )
+    assert update.status_code == 200
+
+    latest = client.get("/api/settings/failure-guard")
+    assert latest.status_code == 200
+    payload = latest.json()
+    assert payload["TASK_FAILURE_THRESHOLD"] == 5
+    assert payload["TASK_FAILURE_PAUSE_SECONDS"] == 7200
+    assert payload["TASK_FAILURE_TZ"] == "UTC"
 
 
 def test_ai_account_crud_round_trip(mysql_test_env):

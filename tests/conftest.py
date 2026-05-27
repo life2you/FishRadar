@@ -143,12 +143,7 @@ class FakeSchedulerService:
 
 @pytest.fixture()
 def api_context(tmp_path, monkeypatch, mysql_test_env):
-    config_file = tmp_path / "config.json"
-    config_file.write_text("[]", encoding="utf-8")
-
-    repository = MySQLTaskRepository(
-        legacy_config_file=None,
-    )
+    repository = MySQLTaskRepository()
     task_service = TaskService(repository)
     process_service = FakeProcessService()
     scheduler_service = FakeSchedulerService()
@@ -201,7 +196,6 @@ def api_context(tmp_path, monkeypatch, mysql_test_env):
 
     return {
         "app": app,
-        "config_file": config_file,
         "database_url": mysql_test_env,
         "process_service": process_service,
         "scheduler_service": scheduler_service,

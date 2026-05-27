@@ -18,7 +18,6 @@ def test_tenant_registration_requires_activation_before_workspace_access(tmp_pat
     monkeypatch.chdir(tmp_path)
 
     bootstrap_mysql_storage(
-        legacy_config_file=None,
         legacy_result_dir=str(tmp_path / "jsonl"),
         legacy_price_history_dir=str(tmp_path / "price_history"),
     )
@@ -85,7 +84,6 @@ def test_extend_tenant_access_and_detail_metrics(tmp_path, monkeypatch, mysql_te
     monkeypatch.chdir(tmp_path)
 
     bootstrap_mysql_storage(
-        legacy_config_file=None,
         legacy_result_dir=str(tmp_path / "jsonl"),
         legacy_price_history_dir=str(tmp_path / "price_history"),
     )

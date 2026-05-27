@@ -3,19 +3,17 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 
 from src.failure_guard import FailureGuard
+from src.infrastructure.persistence.mysql_connection import init_schema, mysql_connection
 
 
-def test_failure_guard_opens_circuit_after_threshold_and_rate_limits(tmp_path):
-    guard_path = tmp_path / "guard.json"
+def test_failure_guard_opens_circuit_after_threshold_and_rate_limits(tmp_path, mysql_test_env):
     cookie_path = tmp_path / "xianyu_state.json"
     cookie_path.write_text("{}", encoding="utf-8")
 
-    guard = FailureGuard(
-        path=str(guard_path),
-        threshold=3,
-        pause_seconds=3 * 24 * 60 * 60,
-        tz_name="Asia/Shanghai",
-    )
+    with mysql_connection() as conn:
+        init_schema(conn)
+
+    guard = FailureGuard(threshold=3, pause_seconds=3 * 24 * 60 * 60, tz_name="Asia/Shanghai")
 
     base = datetime(2026, 3, 4, 12, 0, 0)
 
@@ -46,17 +44,14 @@ def test_failure_guard_opens_circuit_after_threshold_and_rate_limits(tmp_path):
     assert d1b.should_notify is False
 
 
-def test_failure_guard_auto_recovers_on_cookie_change(tmp_path):
-    guard_path = tmp_path / "guard.json"
+def test_failure_guard_auto_recovers_on_cookie_change(tmp_path, mysql_test_env):
     cookie_path = tmp_path / "xianyu_state.json"
     cookie_path.write_text("{}", encoding="utf-8")
 
-    guard = FailureGuard(
-        path=str(guard_path),
-        threshold=2,
-        pause_seconds=3 * 24 * 60 * 60,
-        tz_name="Asia/Shanghai",
-    )
+    with mysql_connection() as conn:
+        init_schema(conn)
+
+    guard = FailureGuard(threshold=2, pause_seconds=3 * 24 * 60 * 60, tz_name="Asia/Shanghai")
 
     base = datetime(2026, 3, 4, 12, 0, 0)
 

@@ -455,7 +455,7 @@ def test_results_reanalyze_updates_ai_analysis(tmp_path, monkeypatch, mysql_test
     ]
     _write_jsonl(target_file, records)
 
-    repository = MySQLTaskRepository(legacy_config_file=None)
+    repository = MySQLTaskRepository()
     task_service = TaskService(repository)
     asyncio.run(
         task_service.create_task(

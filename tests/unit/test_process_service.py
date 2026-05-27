@@ -58,6 +58,13 @@ def test_process_service_marks_task_stopped_when_process_exits(monkeypatch, tmp_
             "src.services.process_service.build_task_log_path",
             lambda task_id, _task_name: str(tmp_path / f"task-{task_id}.log"),
         )
+        monkeypatch.setattr(
+            "src.services.process_service.materialize_runtime_account_states_sync",
+            lambda **_kwargs: {
+                "runtime_state_dir": str(tmp_path / "runtime_state"),
+                "runtime_default_state_file": str(tmp_path / "xianyu_state.json"),
+            },
+        )
         monkeypatch.setattr(asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
 
         started = await service.start_task(0, "task-a")
@@ -98,14 +105,14 @@ def test_process_service_adds_debug_limit_arg_when_env_enabled(monkeypatch):
     monkeypatch.setenv("SPIDER_DEBUG_LIMIT", "1")
     service = ProcessService()
 
-    command = service._build_spawn_command("task-a")
+    command = service._build_spawn_command(7, "task-a")
 
     assert command == [
         sys.executable,
         "-u",
         "spider_v2.py",
-        "--task-name",
-        "task-a",
+        "--task-id",
+        "7",
         "--debug-limit",
         "1",
     ]

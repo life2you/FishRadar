@@ -4,11 +4,11 @@
 import json
 from urllib.parse import urlparse
 
-from src.infrastructure.config.env_manager import env_manager
 from src.infrastructure.config.settings import (
     DEFAULT_TELEGRAM_API_BASE_URL,
     NotificationSettings,
 )
+from src.services.platform_settings_service import load_notification_config_values_sync
 
 
 NOTIFICATION_FIELD_MAP = {
@@ -93,6 +93,18 @@ def build_notification_settings_from_values(values: dict) -> NotificationSetting
 
 def notification_settings_to_values(settings: NotificationSettings) -> dict:
     return _notification_settings_to_values(settings)
+
+
+def notification_settings_to_storage_payload(settings: NotificationSettings) -> dict:
+    values = _notification_settings_to_values(settings)
+    payload = {}
+    for env_name, attr_name in NOTIFICATION_FIELD_MAP.items():
+        value = values.get(attr_name)
+        if value is None:
+            payload[env_name] = "" if env_name != "PCURL_TO_MOBILE" else True
+        else:
+            payload[env_name] = value
+    return payload
 
 
 def normalize_notification_channels(channels: list[str] | tuple[str, ...] | set[str]) -> list[str]:
@@ -281,26 +293,27 @@ def _build_channel_test_values(
 
 
 def load_notification_settings() -> NotificationSettings:
+    values = load_notification_config_values_sync()
     return _build_notification_settings_model(
         {
-            "ntfy_topic_url": _normalize_existing_text(env_manager.get_value("NTFY_TOPIC_URL")),
-            "gotify_url": _normalize_existing_text(env_manager.get_value("GOTIFY_URL")),
-            "gotify_token": _normalize_existing_text(env_manager.get_value("GOTIFY_TOKEN")),
-            "bark_url": _normalize_existing_text(env_manager.get_value("BARK_URL")),
-            "wx_bot_url": _normalize_existing_text(env_manager.get_value("WX_BOT_URL")),
-            "telegram_bot_token": _normalize_existing_text(env_manager.get_value("TELEGRAM_BOT_TOKEN")),
-            "telegram_chat_id": _normalize_existing_text(env_manager.get_value("TELEGRAM_CHAT_ID")),
+            "ntfy_topic_url": _normalize_existing_text(values.get("NTFY_TOPIC_URL")),
+            "gotify_url": _normalize_existing_text(values.get("GOTIFY_URL")),
+            "gotify_token": _normalize_existing_text(values.get("GOTIFY_TOKEN")),
+            "bark_url": _normalize_existing_text(values.get("BARK_URL")),
+            "wx_bot_url": _normalize_existing_text(values.get("WX_BOT_URL")),
+            "telegram_bot_token": _normalize_existing_text(values.get("TELEGRAM_BOT_TOKEN")),
+            "telegram_chat_id": _normalize_existing_text(values.get("TELEGRAM_CHAT_ID")),
             "telegram_api_base_url": (
-                _normalize_existing_text(env_manager.get_value("TELEGRAM_API_BASE_URL"))
+                _normalize_existing_text(values.get("TELEGRAM_API_BASE_URL"))
                 or DEFAULT_TELEGRAM_API_BASE_URL
             ),
-            "webhook_url": _normalize_existing_text(env_manager.get_value("WEBHOOK_URL")),
-            "webhook_method": _normalize_existing_text(env_manager.get_value("WEBHOOK_METHOD")) or "POST",
-            "webhook_headers": _normalize_existing_text(env_manager.get_value("WEBHOOK_HEADERS")),
-            "webhook_content_type": _normalize_existing_text(env_manager.get_value("WEBHOOK_CONTENT_TYPE")) or "JSON",
-            "webhook_query_parameters": _normalize_existing_text(env_manager.get_value("WEBHOOK_QUERY_PARAMETERS")),
-            "webhook_body": _normalize_existing_text(env_manager.get_value("WEBHOOK_BODY")),
-            "pcurl_to_mobile": _env_bool(env_manager.get_value("PCURL_TO_MOBILE"), True),
+            "webhook_url": _normalize_existing_text(values.get("WEBHOOK_URL")),
+            "webhook_method": _normalize_existing_text(values.get("WEBHOOK_METHOD")) or "POST",
+            "webhook_headers": _normalize_existing_text(values.get("WEBHOOK_HEADERS")),
+            "webhook_content_type": _normalize_existing_text(values.get("WEBHOOK_CONTENT_TYPE")) or "JSON",
+            "webhook_query_parameters": _normalize_existing_text(values.get("WEBHOOK_QUERY_PARAMETERS")),
+            "webhook_body": _normalize_existing_text(values.get("WEBHOOK_BODY")),
+            "pcurl_to_mobile": _env_bool(values.get("PCURL_TO_MOBILE"), True),
         }
     )
 

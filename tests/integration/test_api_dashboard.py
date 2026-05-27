@@ -12,9 +12,7 @@ from src.services.task_service import TaskService
 def test_dashboard_summary_aggregates_tasks_and_results(tmp_path, monkeypatch, mysql_test_env):
     monkeypatch.chdir(tmp_path)
 
-    repository = MySQLTaskRepository(
-        legacy_config_file=None,
-    )
+    repository = MySQLTaskRepository()
     task_service = TaskService(repository)
     app = FastAPI()
     app.include_router(dashboard.router)

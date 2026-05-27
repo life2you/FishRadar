@@ -8,43 +8,44 @@ import sys
 
 from openai import AsyncOpenAI
 
-from src.infrastructure.config.settings import ai_settings, scraper_settings, settings
+from src.infrastructure.config.settings import scraper_settings, settings
+from src.services.notification_config_service import load_notification_settings
+from src.services.platform_settings_service import load_ai_runtime_settings_sync
 
+
+_ai_runtime = load_ai_runtime_settings_sync()
+_notification_settings = load_notification_settings()
 
 STATE_FILE = scraper_settings.state_file
 IMAGE_SAVE_DIR = settings.image_save_dir
-CONFIG_FILE = settings.config_file
 TASK_IMAGE_DIR_PREFIX = settings.task_image_dir_prefix
 
 API_URL_PATTERN = "h5api.m.goofish.com/h5/mtop.taobao.idlemtopsearch.pc.search"
 DETAIL_API_URL_PATTERN = "h5api.m.goofish.com/h5/mtop.taobao.idle.pc.detail"
 
-API_KEY = ai_settings.api_key
-BASE_URL = ai_settings.base_url
-MODEL_NAME = ai_settings.model_name
-PROXY_URL = ai_settings.proxy_url
+PROXY_URL = _ai_runtime.proxy_url
 RUN_HEADLESS = scraper_settings.run_headless
 LOGIN_IS_EDGE = scraper_settings.login_is_edge
 RUNNING_IN_DOCKER = scraper_settings.running_in_docker
-AI_DEBUG_MODE = ai_settings.debug_mode
-SKIP_AI_ANALYSIS = ai_settings.skip_analysis
-ENABLE_THINKING = ai_settings.enable_thinking
-ENABLE_RESPONSE_FORMAT = ai_settings.enable_response_format
+AI_DEBUG_MODE = _ai_runtime.debug_mode
+SKIP_AI_ANALYSIS = _ai_runtime.skip_analysis
+ENABLE_THINKING = _ai_runtime.enable_thinking
+ENABLE_RESPONSE_FORMAT = _ai_runtime.enable_response_format
 
-NTFY_TOPIC_URL = os.getenv("NTFY_TOPIC_URL")
-GOTIFY_URL = os.getenv("GOTIFY_URL")
-GOTIFY_TOKEN = os.getenv("GOTIFY_TOKEN")
-BARK_URL = os.getenv("BARK_URL")
-WX_BOT_URL = os.getenv("WX_BOT_URL")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-WEBHOOK_METHOD = os.getenv("WEBHOOK_METHOD", "POST").upper()
-WEBHOOK_HEADERS = os.getenv("WEBHOOK_HEADERS")
-WEBHOOK_CONTENT_TYPE = os.getenv("WEBHOOK_CONTENT_TYPE", "JSON").upper()
-WEBHOOK_QUERY_PARAMETERS = os.getenv("WEBHOOK_QUERY_PARAMETERS")
-WEBHOOK_BODY = os.getenv("WEBHOOK_BODY")
-PCURL_TO_MOBILE = os.getenv("PCURL_TO_MOBILE", "false").lower() == "true"
+NTFY_TOPIC_URL = _notification_settings.ntfy_topic_url
+GOTIFY_URL = _notification_settings.gotify_url
+GOTIFY_TOKEN = _notification_settings.gotify_token
+BARK_URL = _notification_settings.bark_url
+WX_BOT_URL = _notification_settings.wx_bot_url
+TELEGRAM_BOT_TOKEN = _notification_settings.telegram_bot_token
+TELEGRAM_CHAT_ID = _notification_settings.telegram_chat_id
+WEBHOOK_URL = _notification_settings.webhook_url
+WEBHOOK_METHOD = _notification_settings.webhook_method
+WEBHOOK_HEADERS = _notification_settings.webhook_headers
+WEBHOOK_CONTENT_TYPE = _notification_settings.webhook_content_type
+WEBHOOK_QUERY_PARAMETERS = _notification_settings.webhook_query_parameters
+WEBHOOK_BODY = _notification_settings.webhook_body
+PCURL_TO_MOBILE = _notification_settings.pcurl_to_mobile
 
 IMAGE_DOWNLOAD_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:139.0) Gecko/20100101 Firefox/139.0",
@@ -56,25 +57,11 @@ IMAGE_DOWNLOAD_HEADERS = {
 
 os.makedirs(IMAGE_SAVE_DIR, exist_ok=True)
 
+if PROXY_URL:
+    os.environ["HTTP_PROXY"] = PROXY_URL
+    os.environ["HTTPS_PROXY"] = PROXY_URL
 
-def _build_legacy_client():
-    if not BASE_URL or not MODEL_NAME:
-        print("警告：未在 .env 文件中完整设置 OPENAI_BASE_URL 和 OPENAI_MODEL_NAME。AI相关功能可能无法使用。")
-        return None
-    try:
-        if PROXY_URL:
-            os.environ["HTTP_PROXY"] = PROXY_URL
-            os.environ["HTTPS_PROXY"] = PROXY_URL
-        return AsyncOpenAI(api_key=API_KEY, base_url=BASE_URL)
-    except Exception as exc:  # pragma: no cover - compatibility path
-        print(f"初始化 OpenAI 客户端时出错: {exc}")
-        return None
-
-
-client = _build_legacy_client()
-
-if not all([BASE_URL, MODEL_NAME]) and "prompt_generator.py" in sys.argv[0]:
-    sys.exit("错误：请确保在 .env 文件中完整设置了 OPENAI_BASE_URL 和 OPENAI_MODEL_NAME。(OPENAI_API_KEY 对于某些服务是可选的)")
+client: AsyncOpenAI | None = None
 
 
 def get_ai_request_params(**kwargs):

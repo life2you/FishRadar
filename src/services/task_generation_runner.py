@@ -1,12 +1,11 @@
-"""
-任务生成作业执行器
-"""
-import os
-
-import aiofiles
+"""任务生成作业执行器"""
 
 from src.domain.models.task import TaskCreate, TaskGenerateRequest
 from src.prompt_utils import generate_criteria
+from src.services.prompt_document_service import (
+    PROMPT_SOURCE_GENERATED,
+    upsert_prompt_document,
+)
 from src.services.scheduler_service import SchedulerService
 from src.services.task_generation_service import TaskGenerationService
 from src.services.task_prompt_service import (
@@ -65,10 +64,11 @@ def build_task_create(
 async def save_generated_criteria(output_filename: str, generated_criteria: str) -> None:
     if not generated_criteria or not generated_criteria.strip():
         raise RuntimeError("AI 未能生成分析标准，返回内容为空。")
-
-    os.makedirs("prompts", exist_ok=True)
-    async with aiofiles.open(output_filename, "w", encoding="utf-8") as file:
-        await file.write(generated_criteria)
+    upsert_prompt_document(
+        output_filename,
+        generated_criteria.strip(),
+        source=PROMPT_SOURCE_GENERATED,
+    )
 
 
 async def reload_scheduler(
@@ -142,6 +142,4 @@ async def run_ai_generation_job(
         await reload_scheduler(task_service, scheduler_service)
         await generation_service.complete(job_id, task, f"任务“{req.task_name}”创建完成。")
     except Exception as exc:
-        if os.path.exists(output_filename):
-            os.remove(output_filename)
         await generation_service.fail(job_id, f"AI 任务生成失败: {exc}")

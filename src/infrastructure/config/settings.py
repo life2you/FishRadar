@@ -40,18 +40,11 @@ else:
 
 class AISettings(_EnvSettings):
     """AI模型配置"""
-    api_key: Optional[str] = _env_field(None, "OPENAI_API_KEY")
-    base_url: str = _env_field("", "OPENAI_BASE_URL")
-    model_name: str = _env_field("", "OPENAI_MODEL_NAME")
     proxy_url: Optional[str] = _env_field(None, "PROXY_URL")
     debug_mode: bool = _env_field(False, "AI_DEBUG_MODE")
     enable_response_format: bool = _env_field(True, "ENABLE_RESPONSE_FORMAT")
     enable_thinking: bool = _env_field(False, "ENABLE_THINKING")
     skip_analysis: bool = _env_field(False, "SKIP_AI_ANALYSIS")
-
-    def is_configured(self) -> bool:
-        """检查AI是否已正确配置"""
-        return bool(self.base_url and self.model_name)
 
 
 class NotificationSettings(_EnvSettings):
@@ -102,8 +95,6 @@ class AppSettings(_EnvSettings):
     web_password: str = _env_field("admin123", "WEB_PASSWORD")
     task_log_retention_days: int = _env_field(7, "TASK_LOG_RETENTION_DAYS", ge=1)
 
-    # 文件路径配置
-    config_file: str = "config.json"
     image_save_dir: str = "images"
     task_image_dir_prefix: str = "task_images_"
 

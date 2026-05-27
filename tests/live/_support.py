@@ -89,15 +89,12 @@ def load_runtime_env(repo_root: Path) -> dict[str, str]:
 
 def build_ai_test_payload(runtime_env: dict[str, str]) -> dict[str, str]:
     payload = {
-        "OPENAI_BASE_URL": runtime_env.get("OPENAI_BASE_URL", ""),
-        "OPENAI_MODEL_NAME": runtime_env.get("OPENAI_MODEL_NAME", ""),
+        "base_url": runtime_env.get("OPENAI_BASE_URL", ""),
+        "model_name": runtime_env.get("OPENAI_MODEL_NAME", ""),
     }
     api_key = runtime_env.get("OPENAI_API_KEY")
     if api_key:
-        payload["OPENAI_API_KEY"] = api_key
-    proxy_url = runtime_env.get("PROXY_URL")
-    if proxy_url:
-        payload["PROXY_URL"] = proxy_url
+        payload["api_key"] = api_key
     return payload
 
 

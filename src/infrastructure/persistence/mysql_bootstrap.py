@@ -22,23 +22,24 @@ from src.services.account_state_service import (
     get_legacy_account_state_dir,
 )
 from src.services.auth_service import bootstrap_default_auth_data
-from src.services.task_prompt_service import build_task_prompt_payload
+from src.services.prompt_document_service import (
+    PROMPT_SOURCE_SYSTEM,
+)
 
 
 BOOTSTRAP_LOCK = threading.Lock()
-LEGACY_CONFIG_FILE = "config.json"
 LEGACY_RESULT_DIR = "jsonl"
 LEGACY_PRICE_HISTORY_DIR = "price_history"
-TASKS_BOOTSTRAP_KEY = "bootstrap:legacy_tasks"
 RESULTS_BOOTSTRAP_KEY = "bootstrap:legacy_results"
 SNAPSHOTS_BOOTSTRAP_KEY = "bootstrap:legacy_price_snapshots"
 ACCOUNT_STATES_BOOTSTRAP_KEY = "bootstrap:legacy_account_states"
+PROMPTS_BOOTSTRAP_KEY = "bootstrap:legacy_prompts"
+LEGACY_PROMPTS_DIR = "prompts"
 
 
 def bootstrap_mysql_storage(
     db_path: str | None = None,
     *,
-    legacy_config_file: str | None = LEGACY_CONFIG_FILE,
     legacy_result_dir: str = LEGACY_RESULT_DIR,
     legacy_price_history_dir: str = LEGACY_PRICE_HISTORY_DIR,
 ) -> None:
@@ -47,7 +48,7 @@ def bootstrap_mysql_storage(
     with BOOTSTRAP_LOCK:
         with mysql_connection() as conn:
             init_schema(conn)
-            _import_tasks_if_needed(conn, legacy_config_file)
+            _import_prompt_documents_if_needed(conn, LEGACY_PROMPTS_DIR)
             _import_results_if_needed(conn, legacy_result_dir)
             _import_price_snapshots_if_needed(conn, legacy_price_history_dir)
             _import_account_states_if_needed(conn)
@@ -66,84 +67,6 @@ def _load_json_file(path: Path):
     if not content:
         return None
     return json.loads(content)
-
-
-def _import_tasks_if_needed(conn, legacy_config_file: str | None) -> None:
-    if _bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY):
-        return
-    if not _table_is_empty(conn, "tasks"):
-        _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-        conn.commit()
-        return
-    if legacy_config_file is None:
-        _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-        conn.commit()
-        return
-    path = Path(legacy_config_file)
-    tasks = _load_json_file(path)
-    if not isinstance(tasks, list):
-        _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-        conn.commit()
-        return
-
-    for index, raw_task in enumerate(tasks):
-        if not isinstance(raw_task, dict):
-            continue
-        decision_mode = str(raw_task.get("decision_mode", "ai") or "ai").strip().lower()
-        if decision_mode not in {"ai", "keyword"}:
-            decision_mode = "ai"
-        prompt_payload = {
-            "ai_prompt_base_file": raw_task.get("ai_prompt_base_file", "prompts/base_prompt.txt"),
-            "ai_prompt_criteria_file": raw_task.get("ai_prompt_criteria_file", ""),
-            "ai_prompt_base_text": "",
-            "ai_prompt_criteria_text": "",
-            "ai_prompt_text": "",
-        }
-        if decision_mode == "ai":
-            prompt_payload = build_task_prompt_payload(
-                base_prompt_file=str(raw_task.get("ai_prompt_base_file", "prompts/base_prompt.txt")),
-                criteria_file=str(raw_task.get("ai_prompt_criteria_file", "")),
-            )
-        conn.execute(
-            """
-            INSERT INTO tasks (
-                id, task_name, enabled, keyword, description, analyze_images,
-                max_pages, personal_only, min_price, max_price, cron,
-                ai_prompt_base_file, ai_prompt_criteria_file, ai_prompt_base_text,
-                ai_prompt_criteria_text, ai_prompt_text, account_state_file,
-                account_strategy, free_shipping, new_publish_option, region,
-                decision_mode, keyword_rules_json, is_running
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                index,
-                raw_task.get("task_name", ""),
-                _as_int(raw_task.get("enabled", True)),
-                raw_task.get("keyword", ""),
-                raw_task.get("description", ""),
-                _as_int(raw_task.get("analyze_images", True)),
-                int(raw_task.get("max_pages", 1) or 1),
-                _as_int(raw_task.get("personal_only", False)),
-                raw_task.get("min_price"),
-                raw_task.get("max_price"),
-                raw_task.get("cron"),
-                prompt_payload["ai_prompt_base_file"],
-                prompt_payload["ai_prompt_criteria_file"],
-                prompt_payload["ai_prompt_base_text"],
-                prompt_payload["ai_prompt_criteria_text"],
-                prompt_payload["ai_prompt_text"],
-                raw_task.get("account_state_file"),
-                raw_task.get("account_strategy", "auto"),
-                _as_int(raw_task.get("free_shipping", True)),
-                raw_task.get("new_publish_option"),
-                raw_task.get("region"),
-                decision_mode,
-                json.dumps(raw_task.get("keyword_rules") or [], ensure_ascii=False),
-                _as_int(raw_task.get("is_running", False)),
-            ),
-        )
-    _mark_bootstrap_completed(conn, TASKS_BOOTSTRAP_KEY)
-    conn.commit()
 
 
 def _import_results_if_needed(conn, legacy_result_dir: str) -> None:
@@ -243,6 +166,36 @@ def _import_account_states_if_needed(conn) -> None:
             )
 
     _mark_bootstrap_completed(conn, ACCOUNT_STATES_BOOTSTRAP_KEY)
+    conn.commit()
+
+
+def _import_prompt_documents_if_needed(conn, legacy_prompts_dir: str) -> None:
+    if _bootstrap_completed(conn, PROMPTS_BOOTSTRAP_KEY):
+        return
+    prompt_dir = Path(legacy_prompts_dir)
+    if not prompt_dir.exists():
+        _mark_bootstrap_completed(conn, PROMPTS_BOOTSTRAP_KEY)
+        conn.commit()
+        return
+
+    now = _now_iso()
+    for path in sorted(prompt_dir.glob("*.txt")):
+        content = path.read_text(encoding="utf-8").strip()
+        if not content:
+            continue
+        filename = str(path.as_posix())
+        conn.execute(
+            """
+            INSERT INTO prompt_documents (filename, content, source, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON DUPLICATE KEY UPDATE
+                content = VALUES(content),
+                updated_at = VALUES(updated_at)
+            """,
+            (filename, content, PROMPT_SOURCE_SYSTEM, now, now),
+        )
+
+    _mark_bootstrap_completed(conn, PROMPTS_BOOTSTRAP_KEY)
     conn.commit()
 
 

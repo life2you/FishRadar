@@ -9,8 +9,6 @@ from src.services.ai_response_parser import EmptyAIResponseError
 
 def test_generate_criteria_closes_ai_client_after_success(monkeypatch, tmp_path):
     close_state = {"closed": False}
-    reference_file = tmp_path / "reference.txt"
-    reference_file.write_text("reference", encoding="utf-8")
 
     class FakeAIClient:
         def __init__(self, *_args, **_kwargs):
@@ -34,9 +32,14 @@ def test_generate_criteria_closes_ai_client_after_success(monkeypatch, tmp_path)
         "list_ai_route_candidates",
         lambda **_kwargs: _resolved_candidates(),
     )
+    monkeypatch.setattr(
+        prompt_utils,
+        "get_prompt_content",
+        lambda _path: "reference",
+    )
 
     result = asyncio.run(
-        prompt_utils.generate_criteria("need a gpu", str(reference_file))
+        prompt_utils.generate_criteria("need a gpu", "prompts/reference.txt")
     )
 
     assert result == "generated criteria"
@@ -45,8 +48,6 @@ def test_generate_criteria_closes_ai_client_after_success(monkeypatch, tmp_path)
 
 def test_generate_criteria_closes_ai_client_after_ai_failure(monkeypatch, tmp_path):
     close_state = {"closed": False}
-    reference_file = tmp_path / "reference.txt"
-    reference_file.write_text("reference", encoding="utf-8")
 
     class FakeAIClient:
         def __init__(self, *_args, **_kwargs):
@@ -70,9 +71,14 @@ def test_generate_criteria_closes_ai_client_after_ai_failure(monkeypatch, tmp_pa
         "list_ai_route_candidates",
         lambda **_kwargs: _resolved_candidates(),
     )
+    monkeypatch.setattr(
+        prompt_utils,
+        "get_prompt_content",
+        lambda _path: "reference",
+    )
 
     with pytest.raises(RuntimeError, match="所有 AI 账号生成分析标准均失败: AI响应内容为空"):
-        asyncio.run(prompt_utils.generate_criteria("need a gpu", str(reference_file)))
+        asyncio.run(prompt_utils.generate_criteria("need a gpu", "prompts/reference.txt"))
 
     assert close_state["closed"] is True
 

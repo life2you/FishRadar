@@ -2,7 +2,6 @@ import asyncio
 import sys
 import os
 import argparse
-import json
 import signal
 import contextlib
 import re
@@ -25,7 +24,7 @@ async def main():
         description="闲鱼商品监控脚本，支持多任务配置和实时AI分析。",
         epilog="""
 使用示例:
-  # 运行 config.json 中定义的所有任务
+  # 运行数据库中所有启用的任务
   python spider_v2.py
 
   # 只运行名为 "Sony A7M4" 的任务 (通常由调度器调用)
@@ -37,23 +36,13 @@ async def main():
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--debug-limit", type=int, default=0, help="调试模式：每个任务仅处理前 N 个新商品（0 表示无限制）")
-    parser.add_argument("--config", type=str, help="指定任务配置文件路径（传入时优先读取 JSON）")
     parser.add_argument("--task-id", type=int, help="只运行指定ID的单个任务 (用于任务进程调度)")
     parser.add_argument("--task-name", type=str, help="只运行指定名称的单个任务 (用于定时任务调度)")
     args = parser.parse_args()
 
-    if args.config:
-        if not os.path.exists(args.config):
-            sys.exit(f"错误: 配置文件 '{args.config}' 不存在。")
-        try:
-            with open(args.config, 'r', encoding='utf-8') as f:
-                tasks_config = json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            sys.exit(f"错误: 读取或解析配置文件 '{args.config}' 失败: {e}")
-    else:
-        repository = MySQLTaskRepository()
-        tasks = await repository.find_all()
-        tasks_config = [task.model_dump() for task in tasks]
+    repository = MySQLTaskRepository()
+    tasks = await repository.find_all()
+    tasks_config = [task.model_dump() for task in tasks]
 
     runtime_state = materialize_runtime_account_states_sync(
         runtime_state_dir=get_runtime_account_state_dir(),

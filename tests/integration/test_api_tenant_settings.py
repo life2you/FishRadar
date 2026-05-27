@@ -10,7 +10,6 @@ from src.infrastructure.persistence.mysql_bootstrap import bootstrap_mysql_stora
 def _build_tenant_settings_client(tmp_path, monkeypatch, mysql_test_env) -> TestClient:
     monkeypatch.chdir(tmp_path)
     bootstrap_mysql_storage(
-        legacy_config_file=None,
         legacy_result_dir=str(tmp_path / "jsonl"),
         legacy_price_history_dir=str(tmp_path / "price_history"),
     )

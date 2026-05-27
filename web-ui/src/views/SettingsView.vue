@@ -73,7 +73,7 @@ const aiAccountForm = ref<AiAccountFormState>({
   notes: '',
 })
 const aiAccountFormTitle = computed(() => editingAiAccountId.value ? '编辑 AI 账号' : '新增 AI 账号')
-const activeAiAccountCount = computed(() => aiAccounts.value.filter((item) => item.enabled && !item.is_fallback).length)
+const activeAiAccountCount = computed(() => aiAccounts.value.filter((item) => item.enabled).length)
 const settingsHeroCards = computed(() => [
   {
     icon: Bot,
@@ -96,7 +96,7 @@ const settingsHeroCards = computed(() => [
     detail: systemStatus.value?.scraper_running ? t('common.running') : t('common.idle'),
   },
 ])
-const aiAccountList = computed(() => aiAccounts.value.filter((item) => !item.is_fallback))
+const aiAccountList = computed(() => aiAccounts.value)
 
 function formatDateTime(value?: string | null) {
   if (!value) {
@@ -173,9 +173,6 @@ function resetAiAccountForm() {
 }
 
 function handleEditAiAccount(item: AiAccountItem) {
-  if (item.is_fallback) {
-    return
-  }
   editingAiAccountId.value = item.id
   aiAccountForm.value = {
     name: item.name,
@@ -223,9 +220,6 @@ async function handleSaveAiAccount() {
 }
 
 async function handleDeleteAiAccount(item: AiAccountItem) {
-  if (item.is_fallback) {
-    return
-  }
   try {
     await deleteAiAccount(item.id)
     notifySuccess('AI账号已删除')
@@ -260,9 +254,6 @@ async function handleTestAiAccount() {
 }
 
 async function handleTestExistingAiAccount(item: AiAccountItem) {
-  if (item.is_fallback) {
-    return
-  }
   try {
     const res = await testExistingAiAccount(item.id)
     if (res.success) {
@@ -429,11 +420,11 @@ onMounted(() => {
                 </div>
                 <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <p class="text-xs font-semibold text-slate-500">图片分析账号</p>
-                  <p class="mt-1 text-2xl font-black text-slate-900">{{ aiAccounts.filter((item) => item.enabled && item.supports_image && !item.is_fallback).length }}</p>
+                  <p class="mt-1 text-2xl font-black text-slate-900">{{ aiAccounts.filter((item) => item.enabled && item.supports_image).length }}</p>
                 </div>
                 <div class="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
                   <p class="text-xs font-semibold text-slate-500">文本分析账号</p>
-                  <p class="mt-1 text-2xl font-black text-slate-900">{{ aiAccounts.filter((item) => item.enabled && item.supports_text && !item.is_fallback).length }}</p>
+                  <p class="mt-1 text-2xl font-black text-slate-900">{{ aiAccounts.filter((item) => item.enabled && item.supports_text).length }}</p>
                 </div>
               </div>
 
@@ -456,9 +447,6 @@ onMounted(() => {
                           <h3 class="text-base font-black text-slate-900">{{ item.name }}</h3>
                           <span class="rounded-full border px-2 py-0.5 text-[11px] font-semibold" :class="item.enabled ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-100 text-slate-500'">
                             {{ item.enabled ? '启用中' : '已停用' }}
-                          </span>
-                          <span v-if="item.is_fallback" class="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
-                            环境回退
                           </span>
                         </div>
                         <p class="mt-1 break-all text-sm text-slate-600">{{ item.base_url }}</p>
@@ -498,7 +486,7 @@ onMounted(() => {
                         </div>
                         <p v-if="item.notes" class="mt-3 text-sm text-slate-500">{{ item.notes }}</p>
                       </div>
-                      <div v-if="!item.is_fallback" class="flex shrink-0 flex-wrap gap-2">
+                      <div class="flex shrink-0 flex-wrap gap-2">
                         <Button variant="outline" size="sm" @click="handleTestExistingAiAccount(item)">测试</Button>
                         <Button variant="outline" size="sm" @click="handleEditAiAccount(item)">编辑</Button>
                         <Button variant="outline" size="sm" class="text-rose-600 hover:text-rose-700" @click="handleDeleteAiAccount(item)">删除</Button>
@@ -626,15 +614,6 @@ onMounted(() => {
                 </div>
                 
                 <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div class="p-3 border rounded-lg" :class="systemStatus.env_file.openai_api_key_set ? 'bg-green-50 border-green-200' : 'bg-yellow-50 border-yellow-200'">
-                        <div class="flex justify-between items-center">
-                            <span class="font-medium text-sm">OpenAI API Key</span>
-                            <span class="text-xs font-bold" :class="systemStatus.env_file.openai_api_key_set ? 'text-green-700' : 'text-yellow-700'">
-                                {{ systemStatus.env_file.openai_api_key_set ? t('common.active') : t('common.inactive') }}
-                            </span>
-                        </div>
-                    </div>
-                    
                     <div class="p-3 border rounded-lg" :class="tenantNotificationChannels.length ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-200'">
                          <div class="flex justify-between items-center">
                             <span class="font-medium text-sm">{{ t('settings.status.channels') }}</span>

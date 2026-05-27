@@ -13,7 +13,7 @@ from playwright.async_api import (
     async_playwright,
 )
 
-from src.infrastructure.config.settings import ai_settings, scraper_settings
+from src.infrastructure.config.settings import scraper_settings
 from src.services.image_runtime_service import (
     download_all_images,
     cleanup_task_images,
@@ -55,6 +55,10 @@ from src.services.search_pagination import (
     is_search_results_response,
 )
 from src.services.task_prompt_service import resolve_runtime_ai_prompt
+from src.services.platform_settings_service import (
+    load_ai_runtime_values_sync,
+    load_rotation_settings_sync,
+)
 
 
 class RiskControlError(Exception):
@@ -190,42 +194,44 @@ def _as_int(value, default: int) -> int:
 
 
 def _get_rotation_settings(task_config: dict) -> dict:
+    platform_rotation = load_rotation_settings_sync()
     account_cfg = task_config.get("account_rotation") or {}
     proxy_cfg = task_config.get("proxy_rotation") or {}
 
     account_enabled = _as_bool(
         account_cfg.get("enabled"),
-        _as_bool(os.getenv("ACCOUNT_ROTATION_ENABLED"), False),
+        bool(platform_rotation.get("ACCOUNT_ROTATION_ENABLED", False)),
     )
     account_mode = (
-        account_cfg.get("mode") or os.getenv("ACCOUNT_ROTATION_MODE", "per_task")
+        account_cfg.get("mode") or str(platform_rotation.get("ACCOUNT_ROTATION_MODE", "per_task"))
     ).lower()
     account_state_dir = account_cfg.get("state_dir") or os.getenv(
         "ACCOUNT_STATE_DIR", "state"
     )
     account_retry_limit = _as_int(
         account_cfg.get("retry_limit"),
-        _as_int(os.getenv("ACCOUNT_ROTATION_RETRY_LIMIT"), 2),
+        _as_int(platform_rotation.get("ACCOUNT_ROTATION_RETRY_LIMIT"), 2),
     )
     account_blacklist_ttl = _as_int(
         account_cfg.get("blacklist_ttl_sec"),
-        _as_int(os.getenv("ACCOUNT_BLACKLIST_TTL"), 300),
+        _as_int(platform_rotation.get("ACCOUNT_BLACKLIST_TTL"), 300),
     )
 
     proxy_enabled = _as_bool(
-        proxy_cfg.get("enabled"), _as_bool(os.getenv("PROXY_ROTATION_ENABLED"), False)
+        proxy_cfg.get("enabled"),
+        bool(platform_rotation.get("PROXY_ROTATION_ENABLED", False)),
     )
     proxy_mode = (
-        proxy_cfg.get("mode") or os.getenv("PROXY_ROTATION_MODE", "per_task")
+        proxy_cfg.get("mode") or str(platform_rotation.get("PROXY_ROTATION_MODE", "per_task"))
     ).lower()
-    proxy_pool = proxy_cfg.get("proxy_pool") or os.getenv("PROXY_POOL", "")
+    proxy_pool = proxy_cfg.get("proxy_pool") or str(platform_rotation.get("PROXY_POOL", ""))
     proxy_retry_limit = _as_int(
         proxy_cfg.get("retry_limit"),
-        _as_int(os.getenv("PROXY_ROTATION_RETRY_LIMIT"), 2),
+        _as_int(platform_rotation.get("PROXY_ROTATION_RETRY_LIMIT"), 2),
     )
     proxy_blacklist_ttl = _as_int(
         proxy_cfg.get("blacklist_ttl_sec"),
-        _as_int(os.getenv("PROXY_BLACKLIST_TTL"), 300),
+        _as_int(platform_rotation.get("PROXY_BLACKLIST_TTL"), 300),
     )
 
     return {
@@ -244,13 +250,19 @@ def _get_rotation_settings(task_config: dict) -> dict:
 
 def _get_ai_analysis_concurrency(task_config: dict) -> int:
     configured = task_config.get("ai_analysis_concurrency")
-    default = _as_int(os.getenv("AI_ANALYSIS_CONCURRENCY"), 2)
+    default = _as_int(
+        load_ai_runtime_values_sync().get("AI_ANALYSIS_CONCURRENCY"),
+        2,
+    )
     return max(1, _as_int(configured, default))
 
 
 def _get_seller_profile_cache_ttl(task_config: dict) -> int:
     configured = task_config.get("seller_profile_cache_ttl")
-    default = _as_int(os.getenv("SELLER_PROFILE_CACHE_TTL"), 1800)
+    default = _as_int(
+        load_ai_runtime_values_sync().get("SELLER_PROFILE_CACHE_TTL"),
+        1800,
+    )
     return max(0, _as_int(configured, default))
 
 
@@ -609,9 +621,10 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                 ttl_seconds=_get_seller_profile_cache_ttl(task_config)
             )
             ai_analysis_service = AIAnalysisService()
+            ai_runtime_settings = load_ai_runtime_values_sync()
             analysis_dispatcher = ItemAnalysisDispatcher(
                 concurrency=_get_ai_analysis_concurrency(task_config),
-                skip_ai_analysis=ai_settings.skip_analysis,
+                skip_ai_analysis=bool(ai_runtime_settings.get("SKIP_AI_ANALYSIS", False)),
                 seller_loader=lambda user_id: seller_profile_cache.get_or_load(
                     str(user_id),
                     lambda seller_key: scrape_user_profile(context, seller_key),
@@ -1136,7 +1149,7 @@ async def scrape_xianyu(task_config: dict, debug_limit: int = 0):
                                 print(
                                     f"   错误: 获取商品详情API响应失败，状态码: {detail_response.status}"
                                 )
-                                if ai_settings.debug_mode:
+                                if load_ai_runtime_values_sync().get("AI_DEBUG_MODE", False):
                                     print(
                                         f"--- [DETAIL DEBUG] FAILED RESPONSE from {item_data['商品链接']} ---"
                                     )

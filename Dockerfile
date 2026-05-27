@@ -46,11 +46,9 @@ COPY --from=frontend-builder /dist /app/dist
 
 COPY src /app/src
 COPY spider_v2.py /app/spider_v2.py
-COPY prompts /app/prompts
 COPY static /app/static
-COPY config.json.example /app/config.json.example
 
-RUN mkdir -p /app/data /app/state /app/logs /app/images /app/jsonl /app/price_history
+RUN mkdir -p /app/data /app/state /app/logs /app/images
 
 EXPOSE 8000
 

@@ -16,12 +16,8 @@ services:
     volumes:
       - ./.env:/app/.env
       - ./state:/app/state
-      - ./config.json:/app/config.json
-      - ./prompts:/app/prompts
-      - ./jsonl:/app/jsonl
       - ./logs:/app/logs
       - ./images:/app/images
-      - ./price_history:/app/price_history
     restart: unless-stopped
   mysql:
     image: mysql:8.4

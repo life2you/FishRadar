@@ -201,6 +201,29 @@ MYSQL_SCHEMA_STATEMENTS = (
         updated_at VARCHAR(64) NOT NULL COMMENT '更新时间'
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='AI账号池表'
     """,
+    """
+    CREATE TABLE IF NOT EXISTS prompt_documents (
+        filename VARCHAR(255) PRIMARY KEY COMMENT 'Prompt逻辑文件名',
+        content LONGTEXT NOT NULL COMMENT 'Prompt文本内容',
+        source VARCHAR(32) NOT NULL DEFAULT 'system' COMMENT '来源(system/generated/manual)',
+        created_at VARCHAR(64) NOT NULL COMMENT '创建时间',
+        updated_at VARCHAR(64) NOT NULL COMMENT '更新时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Prompt文档表'
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS task_failure_guards (
+        task_key VARCHAR(255) PRIMARY KEY COMMENT '任务熔断键',
+        consecutive_failures INT NOT NULL DEFAULT 0 COMMENT '连续失败次数',
+        paused_until VARCHAR(64) NULL COMMENT '暂停到期时间',
+        last_notified_date VARCHAR(32) NULL COMMENT '最近通知日期',
+        last_failure_reason TEXT NULL COMMENT '最近失败原因',
+        last_failure_at VARCHAR(64) NULL COMMENT '最近失败时间',
+        last_success_at VARCHAR(64) NULL COMMENT '最近成功时间',
+        cookie_path VARCHAR(512) NULL COMMENT '关联登录态文件路径',
+        cookie_mtime DOUBLE NULL COMMENT '登录态文件修改时间',
+        updated_at VARCHAR(64) NOT NULL COMMENT '更新时间'
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='任务失败熔断状态表'
+    """,
 )
 
 MYSQL_INDEX_DEFINITIONS = (
@@ -255,6 +278,11 @@ MYSQL_INDEX_DEFINITIONS = (
     ("idx_auth_sessions_user_id", "auth_sessions", "CREATE INDEX idx_auth_sessions_user_id ON auth_sessions(user_id)"),
     ("idx_activation_codes_status", "activation_codes", "CREATE INDEX idx_activation_codes_status ON activation_codes(status)"),
     ("idx_ai_accounts_enabled_priority", "ai_accounts", "CREATE INDEX idx_ai_accounts_enabled_priority ON ai_accounts(enabled, priority, id)"),
+    (
+        "idx_task_failure_guards_paused_until",
+        "task_failure_guards",
+        "CREATE INDEX idx_task_failure_guards_paused_until ON task_failure_guards(paused_until)",
+    ),
 )
 
 MYSQL_TENANT_COLUMNS_MIGRATION_KEY = "migration:mysql_tenant_columns_v1"
@@ -439,6 +467,20 @@ MYSQL_COMMENT_STATEMENTS = (
     MODIFY COLUMN settings_json LONGTEXT NOT NULL COMMENT '通知配置JSON',
     MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
     COMMENT = '租户通知配置表'
+    """,
+    """
+    ALTER TABLE task_failure_guards
+    MODIFY COLUMN task_key VARCHAR(255) NOT NULL COMMENT '任务熔断键',
+    MODIFY COLUMN consecutive_failures INT NOT NULL DEFAULT 0 COMMENT '连续失败次数',
+    MODIFY COLUMN paused_until VARCHAR(64) NULL COMMENT '暂停到期时间',
+    MODIFY COLUMN last_notified_date VARCHAR(32) NULL COMMENT '最近通知日期',
+    MODIFY COLUMN last_failure_reason TEXT NULL COMMENT '最近失败原因',
+    MODIFY COLUMN last_failure_at VARCHAR(64) NULL COMMENT '最近失败时间',
+    MODIFY COLUMN last_success_at VARCHAR(64) NULL COMMENT '最近成功时间',
+    MODIFY COLUMN cookie_path VARCHAR(512) NULL COMMENT '关联登录态文件路径',
+    MODIFY COLUMN cookie_mtime DOUBLE NULL COMMENT '登录态文件修改时间',
+    MODIFY COLUMN updated_at VARCHAR(64) NOT NULL COMMENT '更新时间',
+    COMMENT = '任务失败熔断状态表'
     """,
 )
 

@@ -1,8 +1,9 @@
 import asyncio
 import importlib
-import json
 import sys
 import types
+
+from src.domain.models.task import Task
 
 
 def test_cli_runs_single_task_with_prompt(tmp_path, load_json_fixture, monkeypatch):
@@ -17,28 +18,71 @@ def test_cli_runs_single_task_with_prompt(tmp_path, load_json_fixture, monkeypat
 
     spider_v2 = importlib.import_module("spider_v2")
     config_data = load_json_fixture("config.sample.json")
-
     base_prompt = "Base prompt. " + ("x" * 120) + " {{CRITERIA_SECTION}}"
     criteria_prompt = "Criteria text for A7M4."
-
-    base_path = tmp_path / "base_prompt.txt"
-    criteria_path = tmp_path / "criteria_prompt.txt"
-    base_path.write_text(base_prompt, encoding="utf-8")
-    criteria_path.write_text(criteria_prompt, encoding="utf-8")
-
-    config_data[0]["ai_prompt_base_file"] = str(base_path)
-    config_data[0]["ai_prompt_criteria_file"] = str(criteria_path)
-
-    config_data[1]["ai_prompt_base_file"] = str(base_path)
-    config_data[1]["ai_prompt_criteria_file"] = str(criteria_path)
-
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps(config_data, ensure_ascii=False), encoding="utf-8")
+    final_prompt = base_prompt.replace("{{CRITERIA_SECTION}}", criteria_prompt)
 
     state_path = tmp_path / "state.json"
     state_path.write_text("{}", encoding="utf-8")
 
     monkeypatch.setattr(spider_v2, "STATE_FILE", str(state_path))
+    monkeypatch.setattr(
+        spider_v2,
+        "materialize_runtime_account_states_sync",
+        lambda **_kwargs: {
+            "runtime_state_dir": str(tmp_path),
+            "runtime_default_state_file": str(state_path),
+        },
+    )
+
+    class FakeRepository:
+        async def find_all(self):
+            return [
+                Task(
+                    id=0,
+                    task_name=config_data[0]["task_name"],
+                    enabled=config_data[0]["enabled"],
+                    keyword=config_data[0]["keyword"],
+                    description=config_data[0]["description"],
+                    analyze_images=True,
+                    max_pages=config_data[0]["max_pages"],
+                    personal_only=config_data[0]["personal_only"],
+                    min_price=config_data[0]["min_price"],
+                    max_price=config_data[0]["max_price"],
+                    cron=config_data[0]["cron"],
+                    ai_prompt_base_file="prompts/base_prompt.txt",
+                    ai_prompt_criteria_file="prompts/sony_a7m4_criteria.txt",
+                    ai_prompt_base_text=base_prompt,
+                    ai_prompt_criteria_text=criteria_prompt,
+                    ai_prompt_text=final_prompt,
+                    decision_mode="ai",
+                    keyword_rules=[],
+                    is_running=False,
+                ),
+                Task(
+                    id=1,
+                    task_name=config_data[1]["task_name"],
+                    enabled=config_data[1]["enabled"],
+                    keyword=config_data[1]["keyword"],
+                    description=config_data[1]["description"],
+                    analyze_images=True,
+                    max_pages=config_data[1]["max_pages"],
+                    personal_only=config_data[1]["personal_only"],
+                    min_price=config_data[1]["min_price"],
+                    max_price=config_data[1]["max_price"],
+                    cron=config_data[1]["cron"],
+                    ai_prompt_base_file="prompts/base_prompt.txt",
+                    ai_prompt_criteria_file="prompts/canon_r6_criteria.txt",
+                    ai_prompt_base_text=base_prompt,
+                    ai_prompt_criteria_text=criteria_prompt,
+                    ai_prompt_text=final_prompt,
+                    decision_mode="ai",
+                    keyword_rules=[],
+                    is_running=False,
+                ),
+            ]
+
+    monkeypatch.setattr(spider_v2, "MySQLTaskRepository", FakeRepository)
 
     called = []
 
@@ -49,7 +93,7 @@ def test_cli_runs_single_task_with_prompt(tmp_path, load_json_fixture, monkeypat
         return 1
 
     monkeypatch.setattr(spider_v2, "scrape_xianyu", fake_scrape_xianyu)
-    monkeypatch.setattr(sys, "argv", ["spider_v2.py", "--config", str(config_path), "--task-name", "Sony A7M4"])
+    monkeypatch.setattr(sys, "argv", ["spider_v2.py", "--task-name", "Sony A7M4"])
 
     asyncio.run(spider_v2.main())
 
@@ -74,12 +118,45 @@ def test_cli_runs_keyword_mode_without_prompt_files(tmp_path, load_json_fixture,
     config_data[0]["ai_prompt_base_file"] = "missing_base.txt"
     config_data[0]["ai_prompt_criteria_file"] = "missing_criteria.txt"
 
-    config_path = tmp_path / "config.json"
-    config_path.write_text(json.dumps(config_data, ensure_ascii=False), encoding="utf-8")
-
     state_path = tmp_path / "state.json"
     state_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(spider_v2, "STATE_FILE", str(state_path))
+    monkeypatch.setattr(
+        spider_v2,
+        "materialize_runtime_account_states_sync",
+        lambda **_kwargs: {
+            "runtime_state_dir": str(tmp_path),
+            "runtime_default_state_file": str(state_path),
+        },
+    )
+
+    class FakeRepository:
+        async def find_all(self):
+            return [
+                Task(
+                    id=0,
+                    task_name=config_data[0]["task_name"],
+                    enabled=True,
+                    keyword=config_data[0]["keyword"],
+                    description=config_data[0]["description"],
+                    analyze_images=True,
+                    max_pages=config_data[0]["max_pages"],
+                    personal_only=config_data[0]["personal_only"],
+                    min_price=config_data[0]["min_price"],
+                    max_price=config_data[0]["max_price"],
+                    cron=config_data[0]["cron"],
+                    ai_prompt_base_file="missing_base.txt",
+                    ai_prompt_criteria_file="missing_criteria.txt",
+                    ai_prompt_base_text="",
+                    ai_prompt_criteria_text="",
+                    ai_prompt_text="",
+                    decision_mode="keyword",
+                    keyword_rules=["a7m4", "验货宝"],
+                    is_running=False,
+                )
+            ]
+
+    monkeypatch.setattr(spider_v2, "MySQLTaskRepository", FakeRepository)
 
     captured = []
 
@@ -88,7 +165,7 @@ def test_cli_runs_keyword_mode_without_prompt_files(tmp_path, load_json_fixture,
         return 1
 
     monkeypatch.setattr(spider_v2, "scrape_xianyu", fake_scrape_xianyu)
-    monkeypatch.setattr(sys, "argv", ["spider_v2.py", "--config", str(config_path), "--task-name", "Sony A7M4"])
+    monkeypatch.setattr(sys, "argv", ["spider_v2.py", "--task-name", "Sony A7M4"])
 
     asyncio.run(spider_v2.main())
 
