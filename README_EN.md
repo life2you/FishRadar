@@ -137,6 +137,8 @@ Default URLs:
 - API docs: `http://127.0.0.1:8000/docs`
 
 The compose file starts MySQL 8 by default and the image already includes Chromium.
+The default app image path is `ghcr.io/life2you/fishradar:latest`.
+The repository includes a GitHub Actions workflow that builds and pushes GHCR images on `master` pushes or manual runs.
 
 ## First-Time Setup
 

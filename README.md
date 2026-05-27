@@ -144,6 +144,8 @@ docker compose down
 - `docker-compose.yaml` 默认会启动一个 MySQL 8 服务
 - 生产或长期环境建议固定自己的数据库与卷
 - 当前镜像已内置 Chromium
+- 默认应用镜像地址为 `ghcr.io/life2you/fishradar:latest`
+- 仓库内置的 GitHub Actions 会在 `master` 分支 push 或手动触发时构建并推送 GHCR 镜像
 
 ### Docker + Nginx 反向代理
 
